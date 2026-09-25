@@ -236,7 +236,7 @@ def cmd_runtime(args) -> int:
         return 0
     emit = _emit_json if args.json_progress else (lambda ev: print(ev, flush=True))
     comps = args.components or ["llama.cpp", "sd.cpp", "python-wasm"]
-    res = RuntimeInstaller(s, emit).install(comps)
+    res = RuntimeInstaller(s, emit).install(comps, force=args.force)
     _emit_json({"event": "summary", "results": {k: (v if isinstance(v, str) else "ok") for k, v in res.items()}})
     critical_failed = isinstance(res.get("llama.cpp"), str) and "llama.cpp" in comps
     return 3 if critical_failed else 0
@@ -341,6 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("action", choices=["install", "status"])
     p.add_argument("--components", nargs="*")
     p.add_argument("--json-progress", action="store_true")
+    p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_runtime)
 
     p = sub.add_parser("diagnose")

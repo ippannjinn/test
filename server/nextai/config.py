@@ -237,9 +237,24 @@ class Settings:
         self.paths = Paths(Path(data_dir).resolve())
         self._file = _flatten(file_values or {})
         self._overrides: dict[str, Any] = {}
-        unknown = [k for k in self._file if k not in FLAT_DEFAULTS and not k.startswith("paths.")]
-        if unknown:
-            raise ValueError(f"unknown config keys: {', '.join(sorted(unknown))}")
+        self.unknown_keys = sorted(k for k in self._file if k not in FLAT_DEFAULTS and not k.startswith("paths."))
+        if self.unknown_keys:
+            # Tolerated so that config files written by other versions never block startup after an update.
+            import logging
+
+            logging.getLogger("nextai.config").warning("ignoring unknown config keys: %s", ", ".join(self.unknown_keys))
+        self._file = {k: v for k, v in self._file.items() if k in FLAT_DEFAULTS}
+        bad = []
+        for k, v in list(self._file.items()):
+            try:
+                _coerce(k, v)
+            except (TypeError, ValueError):
+                bad.append(k)
+                del self._file[k]
+        if bad:
+            import logging
+
+            logging.getLogger("nextai.config").warning("ignoring invalid config values: %s", ", ".join(bad))
         self._rebuild()
 
     def _rebuild(self) -> None:

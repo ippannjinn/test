@@ -134,6 +134,19 @@ class Platform:
                 log.exception("housekeeping failed")
             await asyncio.sleep(600)
 
+    async def _watch_stop_flag(self) -> None:
+        """The Windows service host requests a graceful stop by creating <data>/run/stop."""
+        flag = self.settings.paths.data_dir / "run" / "stop"
+        while True:
+            await asyncio.sleep(1.0)
+            if flag.exists():
+                flag.unlink(missing_ok=True)
+                log.info("stop requested by service host")
+                self.exit_code = 0
+                if self.shutdown_cb:
+                    self.shutdown_cb()
+                return
+
     async def start(self) -> None:
         snap = await asyncio.to_thread(self.monitor.sample)
         self.governor.evaluate(snap)
@@ -141,6 +154,8 @@ class Platform:
         self.monitor.start()
         self.scheduler.start()
         self._spawn(self._housekeeping())
+        (self.settings.paths.data_dir / "run").mkdir(exist_ok=True)
+        self._spawn(self._watch_stop_flag())
         log.info("platform started v%s backends=%s gpu=%s sandbox=%s", self.version, self.backends.mode,
                  self.gpu.name, self.sandbox.name)
 

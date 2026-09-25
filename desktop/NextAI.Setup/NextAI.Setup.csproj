@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>NextAI-Platform-Setup</AssemblyName>
+    <RootNamespace>NextAI.Setup</RootNamespace>
+    <Version>1.0.0</Version>
+    <Company>NextAI Platform</Company>
+    <Product>NextAI Platform</Product>
+    <Description>NextAI Platform セットアップ (Bootstrap Installer)</Description>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <ApplicationIcon>..\Assets\nextai.ico</ApplicationIcon>
+    <ApplicationManifest>..\Assets\setup.manifest</ApplicationManifest>
+    <DebugType>none</DebugType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <PayloadZip Condition="'$(PayloadZip)' == ''">$(MSBuildThisFileDirectory)payload.zip</PayloadZip>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="*.cs" />
+    <Compile Include="..\Common\*.cs" />
+    <EmbeddedResource Include="$(PayloadZip)" LogicalName="NextAI.Setup.payload.zip" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.ServiceProcess" />
+    <Reference Include="System.Management" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+  <Target Name="CheckPayload" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(PayloadZip)')" Text="payload.zip not found. Run build/build.sh to assemble the payload first." />
+  </Target>
+</Project>

@@ -248,11 +248,22 @@ class RuntimeInstaller:
         self._save()
         return entry
 
-    def install(self, components: list[str]) -> dict:
-        ensure_space(self.rt, 2 * 2**30 + (5 * 2**30 if "musicgen" in components else 0),
-                     self.settings.resources.disk_margin_gb)
-        results = {}
+    def installed(self, component: str) -> bool:
+        entry = self.manifest.get(component) or {}
+        rel = entry.get("exe") or entry.get("path") or entry.get("python")
+        return bool(rel) and (self.rt / rel).exists()
+
+    def install(self, components: list[str], force: bool = False) -> dict:
+        pending = [c for c in components if force or not self.installed(c)]
         for c in components:
+            if c not in pending:
+                self.emit({"event": "component_skip", "component": c, "version": self.manifest[c].get("version", "")})
+        if not pending:
+            return {c: self.manifest[c] for c in components}
+        ensure_space(self.rt, 2 * 2**30 + (5 * 2**30 if "musicgen" in pending else 0),
+                     self.settings.resources.disk_margin_gb)
+        results = {c: self.manifest[c] for c in components if c not in pending}
+        for c in pending:
             fn = {"llama.cpp": self.install_llama, "sd.cpp": self.install_sd, "python-wasm": self.install_python_wasm,
                   "musicgen": self.install_musicgen}.get(c)
             if fn is None:
