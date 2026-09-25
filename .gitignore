@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+desktop/**/bin/
+desktop/**/obj/
+build/out/
+build/payload/
+*.part
+*.part.json
