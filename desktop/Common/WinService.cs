@@ -23,6 +23,7 @@ namespace NextAI.Common
                     return sc.Status.ToString();
             }
             catch (InvalidOperationException) { return "NotInstalled"; }
+            catch (Exception) { return "Unknown"; }
         }
 
         public static bool Exists(string name = InstallInfo.ServiceName) => Status(name) != "NotInstalled";
@@ -69,7 +70,7 @@ namespace NextAI.Common
                 }
             }
             catch (System.ServiceProcess.TimeoutException) { return false; }
-            catch (InvalidOperationException) { return false; }
+            catch (Exception) { return false; }
         }
     }
 }

@@ -40,7 +40,7 @@ namespace NextAI.Setup
         /// <summary>Extracts every entry to <paramref name="dest"/>, rejecting path traversal.</summary>
         public static void ExtractTo(string dest, Action<double> progress)
         {
-            var root = Path.GetFullPath(dest).TrimEnd('\\') + "\\";
+            var root = Path.GetFullPath(dest).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
             using (var s = Open())
             using (var z = new ZipArchive(s, ZipArchiveMode.Read))
             {

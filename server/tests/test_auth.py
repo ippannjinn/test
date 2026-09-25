@@ -163,3 +163,14 @@ def test_profile_update_allowed_fields(client, platform):
     r = client.patch("/api/account/profile", json={"role": "admin"})
     assert r.status_code in (200, 422)
     assert platform.auth.get_user_by_name("alice")["role"] == "member"
+
+
+def test_admin_api_rejects_proxied_requests(client, platform):
+    create_admin(platform)
+    r = client.post("/api/auth/login", json={"username": "admin", "password": ADMIN_PW, "client": "admin_app"},
+                    headers={"X-Forwarded-For": "203.0.113.9"})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "admin_local_only"
+    h = admin_token(client)
+    assert client.get("/api/admin/users", headers=h).status_code == 200
+    r = client.get("/api/admin/users", headers={**h, "CF-Connecting-IP": "203.0.113.9"})
+    assert r.status_code == 403

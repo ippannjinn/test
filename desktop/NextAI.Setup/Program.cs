@@ -14,6 +14,8 @@ namespace NextAI.Setup
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            Application.ThreadException += (s, e) =>
+                MessageBox.Show(e.Exception.Message + "\n\n" + e.Exception, "NextAI Platform セットアップ - エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
             var uninstall = args.Any(a => a.Equals("/uninstall", StringComparison.OrdinalIgnoreCase));
             if (uninstall)
             {
@@ -46,6 +48,7 @@ namespace NextAI.Setup
                 MessageBox.Show("64bit 版 Windows が必要です。", "NextAI Platform");
                 return 1;
             }
+            WizardForm.Force = args.Any(a => a.Equals("/force", StringComparison.OrdinalIgnoreCase));
             Application.Run(new WizardForm());
             return 0;
         }

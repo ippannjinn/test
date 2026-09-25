@@ -46,7 +46,10 @@ namespace NextAI.Common
                     p.BeginErrorReadLine();
                     if (stdin != null)
                     {
-                        p.StandardInput.WriteLine(stdin);
+                        // .NET Framework has no StandardInputEncoding; write UTF-8 bytes explicitly (Python runs with PYTHONUTF8=1).
+                        var bytes = new UTF8Encoding(false).GetBytes(stdin + "\n");
+                        p.StandardInput.BaseStream.Write(bytes, 0, bytes.Length);
+                        p.StandardInput.BaseStream.Flush();
                         p.StandardInput.Close();
                     }
                     using (ct.Register(() => { try { if (!p.HasExited) p.Kill(); } catch { } }))

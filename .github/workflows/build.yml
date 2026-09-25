@@ -1,0 +1,60 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  server-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (hash-locked dependencies)
+        working-directory: server
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r requirements.lock || pip install -r requirements.in
+          pip install pytest==8.3.5 pytest-asyncio==0.26.0
+      - name: Tests
+        working-directory: server
+        run: python -m pytest -q
+
+  desktop-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Common library tests
+        run: dotnet test desktop/NextAI.Common.Tests -nologo
+
+  installer:
+    needs: [server-tests, desktop-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Build NextAI-Platform-Setup.exe
+        run: ./build/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NextAI-Platform-Setup
+          path: dist/*
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/NextAI-Platform-Setup.exe dist/NextAI-Platform-Setup.exe.sha256 dist/update-manifest.json --title "NextAI Platform ${GITHUB_REF_NAME}" --notes "Single-file installer. Verify with the .sha256 file."

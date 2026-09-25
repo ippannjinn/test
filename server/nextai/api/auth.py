@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
-from ..auth.deps import ApiError, Ctx, client_ip, cookie_names, is_loopback, require_user
+from ..auth.deps import ApiError, Ctx, client_ip, cookie_names, is_local_admin_request, require_user
 from ..auth.service import AuthError, public_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -60,7 +60,7 @@ def login(body: LoginBody, request: Request, response: Response):
     if not ok:
         raise ApiError(429, "rate_limited", "ログイン試行が多すぎます", {"Retry-After": str(int(retry) + 1)})
     if body.client == "admin_app":
-        if not p.settings.server.allow_remote_admin and not is_loopback(ip):
+        if not p.settings.server.allow_remote_admin and not is_local_admin_request(request, ip):
             raise ApiError(403, "admin_local_only", "管理アプリはサーバーPC上からのみログインできます")
     else:
         _require_xhr(request)

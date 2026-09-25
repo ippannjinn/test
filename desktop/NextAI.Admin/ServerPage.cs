@@ -44,7 +44,7 @@ namespace NextAI.Admin
                 Ui.Btn("復元…", (s, e) => Restore()),
                 Ui.Btn("フォルダを開く", (s, e) => OpenFolder(Path.Combine(Main.Info.DataDir, "backups")))));
 
-            info = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Color.White, Font = Ui.MonoFont };
+            info = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Color.White, Font = Ui.MonoFont, Dock = DockStyle.Fill, TabStop = false };
             var ipanel = new Panel { Dock = DockStyle.Fill };
             ipanel.Controls.Add(info);
             ipanel.Controls.Add(Ui.Toolbar(
@@ -188,7 +188,7 @@ namespace NextAI.Admin
             file = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 240 };
             file.SelectedIndexChanged += async (s, e) => { try { await LoadLog(); } catch (Exception ex) { Ui.Error(this, ex); } };
             follow = new CheckBox { Text = "自動更新", AutoSize = true, Margin = new Padding(8, 6, 3, 3) };
-            text = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Font = Ui.MonoFont, BackColor = Color.FromArgb(15, 23, 42), ForeColor = Color.FromArgb(226, 232, 240) };
+            text = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Font = Ui.MonoFont, BackColor = Color.FromArgb(15, 23, 42), ForeColor = Color.FromArgb(226, 232, 240) };
             var lp = new Panel { Dock = DockStyle.Fill };
             lp.Controls.Add(text);
             lp.Controls.Add(Ui.Toolbar(Ui.Label("ログ:"), file, Ui.Btn("更新", async (s, e) => await LoadLog()), follow));
@@ -209,7 +209,9 @@ namespace NextAI.Admin
             {
                 var l = await Api.GetAsync("/api/admin/logs/list");
                 foreach (var f in l.Arr("logs").Objects()) file.Items.Add(f.Str("name"));
-                if (file.Items.Count > 0) { file.SelectedItem = file.Items.Contains("server.log") ? "server.log" : file.Items[0]; return; }
+                if (file.Items.Count > 0) file.SelectedItem = file.Items.Contains("server.log") ? "server.log" : file.Items[0];
+                await LoadAudit();
+                return;
             }
             await LoadLog();
             if (!follow.Checked) await LoadAudit();

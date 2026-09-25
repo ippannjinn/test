@@ -48,6 +48,17 @@ def client_ip(request: Request) -> str:
     return host
 
 
+_PROXY_HEADERS = ("x-forwarded-for", "forwarded", "x-real-ip", "cf-connecting-ip", "true-client-ip", "x-forwarded-host")
+
+
+def is_local_admin_request(request: Request, ip: str) -> bool:
+    """Loopback peer AND no proxy headers: a tunnel/reverse proxy on this PC must not make remote
+    traffic look local to the admin API."""
+    if any(h in request.headers for h in _PROXY_HEADERS):
+        return False
+    return is_loopback(ip)
+
+
 def is_loopback(ip: str) -> bool:
     try:
         return ipaddress.ip_address(ip).is_loopback
@@ -99,6 +110,6 @@ def require_admin(request: Request) -> Ctx:
         raise ApiError(403, "forbidden", "管理者権限が必要です")
     if ctx.auth != "bearer":
         raise ApiError(403, "admin_app_only", "管理機能は管理デスクトップアプリからのみ利用できます")
-    if not ctx.p.settings.server.allow_remote_admin and not is_loopback(ctx.ip):
+    if not ctx.p.settings.server.allow_remote_admin and not is_local_admin_request(request, ctx.ip):
         raise ApiError(403, "admin_local_only", "管理APIはサーバーPC上からのみ利用できます")
     return ctx

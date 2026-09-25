@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Management;
 using System.Net;
 using System.Net.Sockets;
@@ -68,8 +69,20 @@ namespace NextAI.Common
                     foreach (var o in s.Get()) { p.CpuName = Convert.ToString(o["Name"]).Trim(); break; }
             }
             catch { }
-            var mem = new MEMORYSTATUSEX();
-            if (GlobalMemoryStatusEx(mem)) p.RamGb = mem.ullTotalPhys / 1073741824.0;
+            try
+            {
+                var mem = new MEMORYSTATUSEX();
+                if (GlobalMemoryStatusEx(mem)) p.RamGb = mem.ullTotalPhys / 1073741824.0;
+            }
+            catch (Exception ex) when (ex is EntryPointNotFoundException || ex is DllNotFoundException)
+            {
+                try
+                {
+                    var line = File.ReadAllLines("/proc/meminfo").FirstOrDefault(l => l.StartsWith("MemTotal:"));
+                    if (line != null) p.RamGb = long.Parse(Regex.Match(line, @"\d+").Value) / 1048576.0;
+                }
+                catch { }
+            }
             ProbeGpu(p);
             try
             {

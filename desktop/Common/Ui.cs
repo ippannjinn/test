@@ -57,8 +57,9 @@ namespace NextAI.Common
             g.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(249, 250, 253);
             foreach (var (key, header, width) in cols)
             {
-                var c = new DataGridViewTextBoxColumn { Name = key, HeaderText = header, Width = width, SortMode = DataGridViewColumnSortMode.Automatic };
-                if (width <= 0) { c.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill; c.MinimumWidth = 120; }
+                var c = new DataGridViewTextBoxColumn { Name = key, HeaderText = header, SortMode = DataGridViewColumnSortMode.Automatic };
+                if (width > 0) c.Width = width;
+                else { c.MinimumWidth = 120; c.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill; }
                 g.Columns.Add(c);
             }
             return g;
@@ -79,6 +80,7 @@ namespace NextAI.Common
                 if (selected != null && r.Str("id", r.Str("key", r.Str("name"))) == selected) { row.Selected = true; g.CurrentCell = row.Cells[0]; }
             }
             if (firstRow >= 0 && firstRow < g.Rows.Count) g.FirstDisplayedScrollingRowIndex = firstRow;
+            if (selected == null) g.ClearSelection();
             g.ResumeLayout();
         }
 
@@ -136,7 +138,7 @@ namespace NextAI.Common
         {
             using (var f = new Form { Text = title, StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(560, 380), Font = BaseFont, MinimizeBox = false, AutoScaleMode = AutoScaleMode.Dpi })
             {
-                var box = new TextBox { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, Text = text.Replace("\n", "\r\n"), ScrollBars = ScrollBars.Vertical, Font = MonoFont, BackColor = Color.White };
+                var box = new TextBox { Multiline = true, ReadOnly = true, TabStop = false, Dock = DockStyle.Fill, Text = text.Replace("\n", "\r\n"), ScrollBars = ScrollBars.Vertical, Font = MonoFont, BackColor = Color.White };
                 var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Padding = new Padding(6) };
                 var close = new Button { Text = "閉じる", DialogResult = DialogResult.OK, AutoSize = true };
                 var copy = new Button { Text = "クリップボードにコピー", AutoSize = true };
@@ -146,6 +148,7 @@ namespace NextAI.Common
                 f.Controls.Add(box);
                 f.Controls.Add(bar);
                 f.AcceptButton = close;
+                f.Shown += (s, e) => { box.SelectionLength = 0; close.Focus(); };
                 f.ShowDialog(owner);
             }
         }

@@ -13,6 +13,7 @@ namespace NextAI.Setup
 {
     sealed class WizardForm : Form
     {
+        public static bool Force;
         readonly InstallOptions opt = new InstallOptions();
         readonly string version = Payload.Version();
         readonly Panel content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(24, 18, 24, 8), BackColor = Color.White };
@@ -157,7 +158,7 @@ namespace NextAI.Setup
                   + "・AIサーバーを Windows サービスとして登録 (起動時に自動起動・自動復旧)\r\n"
                   + "・管理コンソール (デスクトップアプリ) と、メンバー用のブラウザ接続URLの発行\r\n\r\n"
                   + "PowerShell やコマンド操作は不要です。モデルのダウンロードに時間がかかるため (合計数十GB)、安定したインターネット接続で実行してください。途中で中断しても、再実行すると続きから再開します。";
-            p.Controls.Add(new TextBox { Text = text, Multiline = true, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Color.White, Dock = DockStyle.Fill, Font = new Font("Yu Gothic UI", 10.5f) });
+            p.Controls.Add(new TextBox { Text = text, Multiline = true, ReadOnly = true, TabStop = false, BorderStyle = BorderStyle.None, BackColor = Color.White, Dock = DockStyle.Fill, Font = new Font("Yu Gothic UI", 10.5f) });
             p.Controls.Add(H(opt.Upgrade ? "NextAI Platform の更新" : "NextAI Platform へようこそ"));
             return p;
         }
@@ -167,7 +168,7 @@ namespace NextAI.Setup
             var p = new Panel();
             checkGrid = Ui.Grid(("status", "結果", 60), ("name", "項目", 150), ("value", "検出値", 280), ("advice", "対処", 0));
             checkSummary = new Label { Dock = DockStyle.Bottom, Height = 46, Padding = new Padding(0, 8, 0, 0) };
-            var re = Ui.Btn("再チェック", (s, e) => RunProbe());
+            var re = Ui.Toolbar(Ui.Btn("再チェック", (s, e) => RunProbe()));
             re.Dock = DockStyle.Bottom;
             p.Controls.Add(checkGrid);
             p.Controls.Add(checkSummary);
@@ -182,7 +183,26 @@ namespace NextAI.Setup
             checkSummary.Text = "診断中…";
             checkSummary.ForeColor = Ui.Muted;
             next.Enabled = false;
-            probe = await Task.Run(() => SystemProbe.Run(opt.DataDir, opt.Port));
+            try
+            {
+                probe = await Task.Run(() => SystemProbe.Run(opt.DataDir, opt.Port));
+                ShowProbe();
+            }
+            catch (Exception ex)
+            {
+                checkSummary.Text = "診断中にエラーが発生しました: " + ex.Message;
+                checkSummary.ForeColor = Ui.Bad;
+                AppendLogSafe(ex.ToString());
+            }
+        }
+
+        void AppendLogSafe(string s)
+        {
+            try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "NextAI-Setup-error.log"), DateTime.Now + " " + s + "\r\n"); } catch { }
+        }
+
+        void ShowProbe()
+        {
             sets = Catalog.Load(probe.VramGb, probe.RamGb, probe.DiskFreeGb);
             var rec = Catalog.Recommend(sets);
             var need = opt.Upgrade ? 5 : Math.Max(20, rec?.SizeGb ?? 20);
@@ -196,6 +216,7 @@ namespace NextAI.Setup
                 checkGrid.Rows[i].Cells[0].Style.ForeColor = Ui.StatusColor(c.Status == "SKIP" ? "" : c.Status);
                 checkGrid.Rows[i].Cells[0].Style.Font = Ui.BoldFont;
             }
+            checkGrid.ClearSelection();
             var fails = checks.Where(c => c.Status == "FAIL").ToList();
             var warns = checks.Count(c => c.Status == "WARN");
             if (fails.Any())
@@ -208,7 +229,8 @@ namespace NextAI.Setup
                 checkSummary.Text = warns > 0 ? $"警告が {warns} 件あります。内容を確認のうえ続行できます。推奨モデルセット: {rec?.Name}" : $"すべての要件を満たしています。推奨モデルセット: {rec?.Name}";
                 checkSummary.ForeColor = warns > 0 ? Ui.Warn : Ui.Ok;
             }
-            next.Enabled = !fails.Any();
+            next.Enabled = !fails.Any() || Force;
+            if (fails.Any() && Force) checkSummary.Text += "  (/force 指定のため続行できます)";
             RefreshSets();
         }
 
@@ -225,14 +247,14 @@ namespace NextAI.Setup
             dataDir = new TextBox { Dock = DockStyle.Fill, Text = opt.DataDir, Enabled = !opt.Upgrade };
             dataDir.Leave += (s, e) => { if (probe != null) RefreshSets(); };
             port = new NumericUpDown { Minimum = 1024, Maximum = 65535, Value = opt.Port, Width = 100 };
-            lan = new CheckBox { Text = "LAN内の他の端末 (スマートフォン等) からの接続を許可する", Checked = true, AutoSize = true };
+            lan = new CheckBox { Text = "LAN内の端末 (スマホ等) からの接続を許可", Checked = true, AutoSize = true };
             serverName = new TextBox { Dock = DockStyle.Fill, Text = opt.ServerName };
             setCombo = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
             setCombo.SelectedIndexChanged += (s, e) => UpdateSetInfo();
             setInfo = new Label { Dock = DockStyle.Fill, AutoSize = false, Height = 84, ForeColor = Ui.Muted };
             skipModels = new CheckBox { Text = opt.Upgrade ? "モデルセットを変更しない (既存モデルを使用)" : "モデルを後でダウンロードする", AutoSize = true, Checked = opt.Upgrade };
-            desktop = new CheckBox { Text = "デスクトップに管理コンソールのショートカットを作成", Checked = true, AutoSize = true };
-            autostart = new CheckBox { Text = "Windows ログイン時に管理コンソールを起動する (サーバー自体は常に自動起動)", AutoSize = true };
+            desktop = new CheckBox { Text = "デスクトップにショートカットを作成", Checked = true, AutoSize = true };
+            autostart = new CheckBox { Text = "ログイン時に管理コンソールを起動 (サーバーは常に自動起動)", AutoSize = true };
             Button Browse(TextBox target) => Ui.Btn("参照…", (s, e) =>
             {
                 using (var d = new FolderBrowserDialog { SelectedPath = target.Text })
@@ -446,7 +468,7 @@ namespace NextAI.Setup
         {
             var p = new Panel();
             finishTitle = H("セットアップが完了しました");
-            finishText = new TextBox { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, BackColor = Color.White, Font = new Font("Yu Gothic UI", 10.5f), ScrollBars = ScrollBars.Vertical };
+            finishText = new TextBox { Multiline = true, ReadOnly = true, TabStop = false, Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, BackColor = Color.White, Font = new Font("Yu Gothic UI", 10.5f), ScrollBars = ScrollBars.Vertical };
             launchAdmin = new CheckBox { Text = "管理コンソールを起動してメンバーを作成する", Checked = true, AutoSize = true, Dock = DockStyle.Bottom };
             var copy = Ui.Btn("接続URLをコピー", (s, e) => { if (finishText.Tag is string u && u != "") Clipboard.SetText(u); });
             copy.Dock = DockStyle.Bottom;
