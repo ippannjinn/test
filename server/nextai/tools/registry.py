@@ -22,6 +22,7 @@ class ToolContext:
     web_requests: int = 0
     assets: list[dict] = field(default_factory=list)
     presented: dict[str, float] = field(default_factory=dict)  # workspace rel path -> mtime already shown
+    research: list[dict] = field(default_factory=list)  # sources found by web_research
 
 
 @dataclass
@@ -71,6 +72,33 @@ class WebSearch(Tool):
             return ToolResult(False, "検索結果がありませんでした")
         lines = [f"{i + 1}. {r['title']}\n   {r['url']}\n   {r['snippet'][:300]}" for i, r in enumerate(results)]
         return ToolResult(True, "\n".join(lines), {"results": results})
+
+
+class WebResearch(Tool):
+    name = "web_research"
+    description = ("Research a question on the web in one step: runs several searches across providers, reads the best "
+                   "pages and returns the most relevant passages as numbered sources [1], [2], ... Prefer this over "
+                   "web_search + web_fetch. Cite the numbers in your answer.")
+    parameters = {"type": "object", "properties": {
+        "question": {"type": "string", "description": "what you want to find out (full question)"},
+        "queries": {"type": "array", "items": {"type": "string"},
+                    "description": "optional extra search queries (other wording, English, specific names)"}},
+        "required": ["question"]}
+    timeout = 90
+
+    async def run(self, ctx, args):
+        from ..services.research import Researcher
+
+        question = str(args.get("question", "")).strip()
+        if not question:
+            return ToolResult(False, "question が空です")
+        extra = [str(q)[:200] for q in (args.get("queries") or [])[:3] if str(q).strip()]
+        res = await Researcher(ctx.platform).run(question, queries=extra, emit=ctx.job.emit, budget=lambda: _web_budget(ctx))
+        ctx.research.extend(res.source_list())
+        if not res.ok:
+            return ToolResult(False, f"検索しましたが関連する情報が見つかりませんでした (検索語: {', '.join(res.queries)})。"
+                                     "別の言い方・英語・正式名称で queries を指定して再検索してください。")
+        return ToolResult(True, res.evidence(), {"sources": res.source_list()})
 
 
 class WebFetch(Tool):
@@ -421,7 +449,7 @@ class GenerateMedia(Tool):
                           {"files": [r["id"] for r in rows]})
 
 
-ALL_TOOLS: dict[str, Tool] = {t.name: t for t in (WebSearch(), WebFetch(), RunCode(), ReadFile(), WriteFile(),
+ALL_TOOLS: dict[str, Tool] = {t.name: t for t in (WebResearch(), WebSearch(), WebFetch(), RunCode(), ReadFile(), WriteFile(),
                                                   ReadWorkspace(), ListWorkspace(), ShareFile(), DownloadFile(),
                                                   MemorySearch(), MemorySave(),
                                                   GenerateMedia("image"), GenerateMedia("video"), GenerateMedia("music"))}

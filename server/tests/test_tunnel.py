@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from conftest import ADMIN_PW, create_admin, create_member, make_settings, web_login
+from conftest import ADMIN_PW, create_admin, create_member, make_settings, offline_web, web_login
 from nextai.app import create_app
 from nextai.platform import Platform
 from nextai.resources.monitor import MockGpuProvider
@@ -9,7 +9,7 @@ from nextai.resources.monitor import MockGpuProvider
 def _tunnel_client(tmp_path):
     # TestClient requests arrive on port 443, so tunnel_port=443 simulates the Funnel listener.
     s = make_settings(tmp_path, server={"tunnel_port": 443, "public_url": "https://pc.example.ts.net"})
-    p = Platform(s, gpu=MockGpuProvider())
+    p = offline_web(Platform(s, gpu=MockGpuProvider()))
     return p, TestClient(create_app(p, manage_lifecycle=False), base_url="https://testserver")
 
 

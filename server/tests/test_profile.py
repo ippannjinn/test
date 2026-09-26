@@ -94,7 +94,7 @@ def test_reevaluation_escalates_and_lightens(engine):
     assert esc and esc.model_id != "qwen3-4b-instruct" and esc.revision == p.revision + 1
     gov.state.level = Level.HIGH
     light = eng.reevaluate(p, "pressure")
-    assert light and light.tool_parallelism == 1 and light.limits["max_steps"] <= 4
+    assert light and light.tool_parallelism == 1 and light.limits["max_steps"] <= 6
     rep = eng.reevaluate(p, "repetition")
     assert rep and rep.plan
 

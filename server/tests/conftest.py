@@ -31,9 +31,19 @@ def settings(tmp_path):
     return make_settings(tmp_path)
 
 
+def offline_web(p):
+    """Tests never hit real search engines: providers return nothing unless a test stubs them."""
+    async def none(_q):
+        return []
+
+    for name in ("_duckduckgo", "_bing", "_wikipedia", "_searxng", "_brave"):
+        setattr(p.web, name, none)
+    return p
+
+
 @pytest.fixture
 def platform(settings):
-    return Platform(settings, gpu=MockGpuProvider())
+    return offline_web(Platform(settings, gpu=MockGpuProvider()))
 
 
 @pytest.fixture

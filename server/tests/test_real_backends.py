@@ -16,7 +16,7 @@ from nextai.backends.media import SdCppBackend, extract_mjpeg_frames
 from nextai.models.catalog import Catalog
 from nextai.models.planner import LaunchPlan
 
-from conftest import make_settings
+from conftest import make_settings, offline_web
 
 FAKE_LLAMA = r'''
 import json, sys, http.server, threading
@@ -173,7 +173,7 @@ def test_platform_real_mode_end_to_end(tmp_path):
 
     _fake(tmp_path, "llama.cpp", "llama-server", FAKE_LLAMA, tmp_path / "args.json")
     s = make_settings(tmp_path, models={"backend_mode": "real", "resident_fast_model": False})
-    p = Platform(s, gpu=MockGpuProvider())
+    p = offline_web(Platform(s, gpu=MockGpuProvider()))
     mdir = s.paths.models / "qwen3-4b-instruct" / "model"
     mdir.mkdir(parents=True)
     (mdir / "Qwen3-4B-Q4_K_M.gguf").write_bytes(b"GGUF" * 1000)

@@ -136,27 +136,135 @@ class WebClient:
         return {"url": res.url, "status": res.status, "title": title[:200], "text": text[:max_chars],
                 "truncated": res.truncated or len(text) > max_chars, "links": links[:20]}
 
+    BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/128.0 Safari/537.36")
+
     async def search(self, query: str, n: int = 6) -> list[dict]:
-        w = self.settings.web
+        """Metasearch: queries several providers in parallel and merges them with reciprocal-rank fusion, so one
+        provider being blocked / rate-limited (DuckDuckGo often answers bots with an empty page) doesn't mean
+        "no results". Configured SearXNG / Brave are used first-class alongside the keyless providers."""
+        import asyncio
+
         query = query.strip()[:300]
         if not query:
             return []
+        w = self.settings.web
+        providers = []
         if w.search_provider == "searxng" and w.searxng_url:
-            r = await self._provider_client.get(w.searxng_url.rstrip("/") + "/search",
-                                                params={"q": query, "format": "json"})
-            r.raise_for_status()
-            return [{"title": x.get("title", ""), "url": x.get("url", ""), "snippet": x.get("content", "")}
-                    for x in r.json().get("results", [])[:n]]
-        if w.search_provider == "brave" and w.brave_api_key:
-            r = await self._provider_client.get("https://api.search.brave.com/res/v1/web/search",
-                                                params={"q": query, "count": n},
-                                                headers={"X-Subscription-Token": w.brave_api_key, "Accept": "application/json"})
-            r.raise_for_status()
-            return [{"title": x.get("title", ""), "url": x.get("url", ""), "snippet": x.get("description", "")}
-                    for x in r.json().get("web", {}).get("results", [])[:n]]
-        r = await self._provider_client.get(f"https://html.duckduckgo.com/html/?q={quote_plus(query)}&kl=jp-jp")
+            providers.append(("searxng", self._searxng))
+        if w.brave_api_key:
+            providers.append(("brave", self._brave))
+        providers += [("duckduckgo", self._duckduckgo), ("bing", self._bing), ("wikipedia", self._wikipedia)]
+        results = await asyncio.gather(*(fn(query) for _, fn in providers), return_exceptions=True)
+        fused: dict[str, dict] = {}
+        for (name, _), res in zip(providers, results):
+            if isinstance(res, BaseException):
+                log.info("search provider %s failed: %s", name, res)
+                continue
+            weight = 0.6 if name == "wikipedia" else 1.0
+            for rank, item in enumerate(res[:10]):
+                url = item.get("url", "")
+                if not url.startswith("http"):
+                    continue
+                key = _norm_url(url)
+                cur = fused.setdefault(key, {**item, "score": 0.0, "providers": []})
+                cur["score"] += weight / (60 + rank)
+                cur["providers"].append(name)
+                if len(item.get("snippet", "")) > len(cur.get("snippet", "")):
+                    cur["snippet"] = item["snippet"]
+        ranked = sorted(fused.values(), key=lambda x: -x["score"])
+        return [{"title": x.get("title", "") or x["url"], "url": x["url"], "snippet": x.get("snippet", "")[:400],
+                 "providers": x["providers"]} for x in ranked[:n]]
+
+    async def _searxng(self, query: str) -> list[dict]:
+        w = self.settings.web
+        r = await self._provider_client.get(w.searxng_url.rstrip("/") + "/search", params={"q": query, "format": "json"})
         r.raise_for_status()
-        return parse_duckduckgo(r.text)[:n]
+        return [{"title": x.get("title", ""), "url": x.get("url", ""), "snippet": x.get("content", "")}
+                for x in r.json().get("results", [])]
+
+    async def _brave(self, query: str) -> list[dict]:
+        r = await self._provider_client.get("https://api.search.brave.com/res/v1/web/search", params={"q": query, "count": 10},
+                                            headers={"X-Subscription-Token": self.settings.web.brave_api_key,
+                                                     "Accept": "application/json"})
+        r.raise_for_status()
+        return [{"title": x.get("title", ""), "url": x.get("url", ""), "snippet": x.get("description", "")}
+                for x in r.json().get("web", {}).get("results", [])]
+
+    async def _duckduckgo(self, query: str) -> list[dict]:
+        h = {"User-Agent": self.BROWSER_UA, "Accept-Language": "ja,en;q=0.8", "Referer": "https://html.duckduckgo.com/"}
+        r = await self._provider_client.post("https://html.duckduckgo.com/html/", data={"q": query, "kl": "jp-jp"}, headers=h)
+        res = parse_duckduckgo(r.text) if r.status_code == 200 else []
+        if not res:  # bot check / empty page: try the lite endpoint
+            r = await self._provider_client.post("https://lite.duckduckgo.com/lite/", data={"q": query, "kl": "jp-jp"}, headers=h)
+            res = parse_duckduckgo_lite(r.text) if r.status_code == 200 else []
+        return res
+
+    async def _bing(self, query: str) -> list[dict]:
+        r = await self._provider_client.get("https://www.bing.com/search", params={"q": query, "setlang": "ja", "cc": "JP"},
+                                            headers={"User-Agent": self.BROWSER_UA, "Accept-Language": "ja,en;q=0.8"})
+        r.raise_for_status()
+        return parse_bing(r.text)
+
+    async def _wikipedia(self, query: str) -> list[dict]:
+        import asyncio
+
+        async def one(lang: str) -> list[dict]:
+            r = await self._provider_client.get(f"https://{lang}.wikipedia.org/w/api.php", params={
+                "action": "query", "list": "search", "srsearch": query, "srlimit": 5, "format": "json", "utf8": 1})
+            r.raise_for_status()
+            return [{"title": x["title"], "url": f"https://{lang}.wikipedia.org/wiki/{quote_plus(x['title'].replace(' ', '_'))}",
+                     "snippet": html.unescape(re.sub(r"<[^>]+>", "", x.get("snippet", "")))}
+                    for x in r.json().get("query", {}).get("search", [])]
+
+        langs = ["ja", "en"] if re.search(r"[぀-ヿ一-鿿]", query) else ["en", "ja"]
+        parts = await asyncio.gather(*(one(x) for x in langs), return_exceptions=True)
+        return [x for p in parts if not isinstance(p, BaseException) for x in p]
+
+
+def _norm_url(url: str) -> str:
+    u = urlsplit(url)
+    return (u.netloc.lower().removeprefix("www.").removeprefix("m.") + u.path.rstrip("/")).lower()
+
+
+def _clean(s: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", s or "")).strip()
+
+
+def parse_duckduckgo_lite(page: str) -> list[dict]:
+    out = []
+    for m in re.finditer(r"<a[^>]+href=\"([^\"]+)\"[^>]*class=['\"]result-link['\"][^>]*>(.*?)</a>(.*?)(?=class=['\"]result-link|$)",
+                         page, re.S):
+        href = html.unescape(m.group(1))
+        if "uddg=" in href:
+            href = parse_qs(urlsplit(href if href.startswith("http") else "https:" + href).query).get("uddg", [href])[0]
+        sn = re.search(r"class=['\"]result-snippet['\"][^>]*>(.*?)</td>", m.group(3), re.S)
+        if href.startswith("http"):
+            out.append({"title": _clean(m.group(2)), "url": href, "snippet": _clean(sn.group(1) if sn else "")})
+    return out
+
+
+def parse_bing(page: str) -> list[dict]:
+    import base64
+
+    out = []
+    for m in re.finditer(r'<li class="b_algo"(.*?)</li>', page, re.S):
+        block = m.group(1)
+        a = re.search(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
+        if not a:
+            continue
+        href = html.unescape(a.group(1))
+        if "bing.com/ck/a" in href:  # tracking redirect: real URL is base64 in u=a1...
+            u = parse_qs(urlsplit(href).query).get("u", [""])[0]
+            if u.startswith("a1"):
+                try:
+                    href = base64.urlsafe_b64decode(u[2:] + "=" * (-len(u[2:]) % 4)).decode("utf-8", "replace")
+                except ValueError:
+                    continue
+        sn = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
+        if href.startswith("http"):
+            out.append({"title": _clean(a.group(2)), "url": href, "snippet": _clean(sn.group(1) if sn else "")})
+    return out
 
 
 def parse_duckduckgo(page: str) -> list[dict]:

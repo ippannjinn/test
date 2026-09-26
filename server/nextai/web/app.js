@@ -608,7 +608,7 @@ function sourcesEl(list) {
   return h("div", { class: "sources" }, h("span", { class: "src-label" }, "参照したページ"), list.slice(0, 12).map((x, i) => {
     let host = x.url;
     try { host = new URL(x.url).hostname.replace(/^www\./, ""); } catch { /* keep */ }
-    return h("a", { class: "src", href: x.url, target: "_blank", rel: "noopener noreferrer nofollow", title: x.url }, h("span", { class: "n" }, i + 1), host);
+    return h("a", { class: "src", href: x.url, target: "_blank", rel: "noopener noreferrer nofollow", title: `${x.title ? x.title + "\n" : ""}${x.url}` }, h("span", { class: "n" }, i + 1), host);
   }));
 }
 
@@ -717,7 +717,7 @@ async function send() {
 }
 
 const PHASE = { plan: "計画中", act: "実行中", verify: "検証中" };
-const TOOL_LABEL = { generate_image: "画像を生成", generate_video: "動画を生成", generate_music: "音楽を作曲", web_search: "Web検索", web_fetch: "ページを読む",
+const TOOL_LABEL = { web_research: "Webで調べ", generate_image: "画像を生成", generate_video: "動画を生成", generate_music: "音楽を作曲", web_search: "Web検索", web_fetch: "ページを読む",
   run_code: "コードを実行", read_file: "ファイルを読む", write_file: "ファイルを書く", memory_search: "記憶を検索", memory_save: "記憶を保存" };
 function attachLive(jobId) {
   S.activeJob = jobId; updateSend();
@@ -766,6 +766,12 @@ function attachLive(jobId) {
   on("delta", (d) => {
     if (!text && thought) { think.open = false; think.querySelector("summary span").textContent = "思考過程"; }
     text += d.text; paint();
+  });
+  on("research", (r) => {
+    statusLine.parentElement.hidden = false;
+    if (r.phase === "search") { statusLine.textContent = `検索しています: ${(r.queries || []).join(" / ")}`; addStep(`🔎 検索: ${(r.queries || []).join(" / ")}`); }
+    else if (r.phase === "read") { statusLine.textContent = `${(r.pages || []).length} 件のページを読んでいます…`; addStep(`📖 読む: ${(r.pages || []).map((u) => { try { return new URL(u).hostname; } catch { return u; } }).join(", ")}`); }
+    else if (r.phase === "done") { statusLine.textContent = r.sources ? `${r.sources} 件の情報源から回答を作成しています…` : "情報が見つからなかったため、分かる範囲で回答します…"; }
   });
   on("reasoning", (d) => { thought += d.text; think.hidden = false; thinkText.textContent = thought; });
   on("memory_used", (d) => memHolder.replaceWith(memoryChip(d.items) || memHolder));

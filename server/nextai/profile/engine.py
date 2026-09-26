@@ -164,7 +164,7 @@ class ProfileEngine:
         web = self.web_enabled_fn()
         if web and (a.needs_web or (a.complexity > 0.05 and a.task_type not in ("translation",) and not a.is_media)):
             # like the cloud assistants: search is always at hand; the model decides when it needs it
-            tools += ["web_search", "web_fetch"]
+            tools += ["web_research", "web_search", "web_fetch"]
         sandbox = self.sandbox_enabled_fn()
         if sandbox and (a.needs_code_exec or (a.task_type in ("coding", "reasoning") and t >= 0.6)):
             tools.append("run_code")
@@ -314,14 +314,16 @@ class ProfileEngine:
             if self.governor.state.level >= Level.HIGH:
                 new.tool_parallelism = 1
                 new.max_tokens = max(512, int(prof.max_tokens * 0.7))
-                new.limits["max_steps"] = max(1, min(prof.limits.get("max_steps", 1), 4))
+                # lighter, but never so short that a research / tool task can't finish
+                keep = 6 if any(t.startswith("web_") for t in prof.tools) else 4
+                new.limits["max_steps"] = max(1, min(prof.limits.get("max_steps", 1), max(keep, prof.limits.get("max_steps", 1) // 2)))
                 new.tuning = max(0.0, prof.tuning - 0.2)
                 new.label = tuning_label(new.tuning)
                 new.reasons.append("リソース逼迫のため途中で軽量化")
                 changed = True
         elif signal == "needs_web":
             if "web_search" not in prof.tools and self.web_enabled_fn():
-                new.tools = prof.tools + ["web_search", "web_fetch"]
+                new.tools = prof.tools + ["web_research", "web_search", "web_fetch"]
                 new.use_agent = True
                 new.limits["max_steps"] = max(prof.limits.get("max_steps", 1), 3)
                 new.reasons.append("情報不足のためWeb検索を追加")

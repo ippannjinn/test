@@ -61,7 +61,7 @@ def test_agent_stops_on_repeated_failures(client, platform):
     job = wait_job(client, r.json()["job"]["id"], 30)
     assert job["status"] == "done"
     j = platform.jobs.get(job["id"])
-    fails = [e for e in j.events if e["type"] == "tool_result" and not e["data"]["ok"]]
+    fails = [e for e in j.events if e["type"] == "tool_result" and not e["data"]["ok"] and e["data"]["name"] == "web_fetch"]
     assert fails and "拒否" in fails[0]["data"]["summary"]
     assert any(e["type"] == "notice" for e in j.events) or len(fails) <= 8
 
