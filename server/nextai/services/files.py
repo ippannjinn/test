@@ -212,10 +212,35 @@ class FileStore:
         self.db.execute("DELETE FROM files WHERE id=? AND user_id=?", (file_id, user_id))
         return True
 
-    def delete_all(self, user_id: str) -> None:
+    def delete_all(self, user_id: str) -> bool:
+        """Removes the user's whole folder (uploads, generated files, sandbox workspaces, avatar).
+        Returns False if something could not be removed yet (e.g. a file locked by another process on Windows);
+        the housekeeping sweep retries."""
         root = self.settings.paths.users / user_id
-        if _ID_RE.match(user_id) and root.exists():
+        if not _ID_RE.match(user_id):
+            return False
+        for attempt in range(3):
+            if not root.exists():
+                return True
             shutil.rmtree(root, ignore_errors=True)
+            if root.exists():
+                import time as _t
+
+                _t.sleep(0.5 * (attempt + 1))
+        return not root.exists()
+
+    def sweep_orphans(self, live_user_ids: set[str]) -> list[str]:
+        """Deletes folders of users that no longer exist (or were deleted) - retries failed deletions."""
+        removed = []
+        base = self.settings.paths.users
+        if not base.exists():
+            return removed
+        for d in base.iterdir():
+            if d.is_dir() and _ID_RE.match(d.name) and d.name not in live_user_ids:
+                shutil.rmtree(d, ignore_errors=True)
+                if not d.exists():
+                    removed.append(d.name)
+        return removed
         self.db.execute("DELETE FROM files WHERE user_id=?", (user_id,))
 
     # ------------------------------------------------------------------ text extraction

@@ -119,9 +119,16 @@ namespace NextAI.Admin
                 MessageBox.Show(this, "完全削除の前にアカウントを「無効化」してください。\n(無効化 → 保持 → 完全削除)", "完全削除", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            var typed = Ui.Prompt(this, "完全削除", $"{u.Str("username")} の会話・ファイル・メモリ・生成物をすべて削除します。元に戻せません。\n確認のためユーザー名を入力してください:");
+            var typed = Ui.Prompt(this, "完全削除", $"{u.Str("username")} に紐づくデータをすべて消去します。元に戻せません。\n" +
+                "・会話とメッセージ、長期メモリ、カスタム指示\n・アップロード / 生成したファイル、サンドボックスの作業ディレクトリ\n" +
+                "・APIキー、ログイン中のセッション、信頼済み端末\n(監査ログの記録と、作成済みのバックアップ ZIP は残ります)\n\n確認のためユーザー名を入力してください:");
             if (typed == null) return;
-            Run(() => Api.DeleteAsync($"/api/admin/users/{u.Str("id")}", new JObject { ["confirm_username"] = typed }));
+            Run(async () =>
+            {
+                var r = await Api.DeleteAsync($"/api/admin/users/{u.Str("id")}", new JObject { ["confirm_username"] = typed });
+                if (!r.Bool("files_removed", true))
+                    MessageBox.Show(this, "一部のファイルが使用中のため、まだ消去できていません。サーバーが自動で再試行します (最大10分)。", "完全削除");
+            });
         }
 
         void ResetPassword()

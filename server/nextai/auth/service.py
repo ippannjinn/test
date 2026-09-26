@@ -181,12 +181,18 @@ class AuthService:
         if not user:
             raise AuthError("not_found", "ユーザーが見つかりません", 404)
         ts = now()
+        self.db.execute("PRAGMA secure_delete=ON")  # overwrite freed pages: deleted chats / memories are not recoverable
         with self.db.tx() as c:
-            for table in ("sessions", "devices", "api_tokens", "conversations", "files", "memories", "jobs", "usage_daily"):
+            for table in ("sessions", "devices", "api_tokens", "messages", "conversations", "files", "memories", "jobs",
+                          "usage_daily"):
                 c.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
             c.execute("UPDATE users SET state='deleted', username=?, display_name='(deleted)', password_hash='!',"
                       " bio='', ui_prefs='{}', avatar_file=NULL, updated_at=?, purge_after=NULL WHERE id=?",
                       (f"deleted-{user_id[:12]}", ts, user_id))
+        try:
+            self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # also drop the copies still in the WAL file
+        except Exception:  # noqa: BLE001 - busy readers: the next checkpoint will do it
+            pass
         self.audit.record("user.delete", actor=actor, target=user["username"], ip=ip)
 
     # ------------------------------------------------------------------ login throttling

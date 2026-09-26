@@ -211,3 +211,37 @@ def test_update_check_follows_redirect_and_compares_versions(client, platform):
         assert client.get("/api/admin/update/check", headers=h).json()["update_available"] is False
     finally:
         srv.shutdown()
+
+
+def test_complete_deletion_erases_data_folder_and_memory(client, platform):
+    import asyncio
+
+    from conftest import admin_token, create_admin, create_member, new_client, wait_job, web_login
+
+    create_admin(platform)
+    u = create_member(platform, "bye")
+    c = new_client(platform)
+    web_login(c, "bye")
+    c.post("/api/memory", json={"content": "猫が好き"})
+    c.post("/api/files", files={"file": ("a.txt", b"secret", "text/plain")})
+    r = c.post("/api/conversations/new/messages",
+               json={"content": 'CSVを作って実行して [[tool:run_code {"code": "open(\'o.csv\',\'w\').write(\'a\')"}]]'}).json()
+    wait_job(c, r["job"]["id"])
+    url = c.post("/api/preview", json={"kind": "html", "content": "<b>x</b>"}).json()["url"]
+    root = platform.settings.paths.users / u["id"]
+    assert (root / "workspaces").exists()
+    h = admin_token(client)
+    client.post(f"/api/admin/users/{u['id']}/state", json={"state": "disabled"}, headers=h)
+    r = client.request("DELETE", f"/api/admin/users/{u['id']}", json={"confirm_username": "bye"}, headers=h)
+    assert r.status_code == 200 and r.json()["files_removed"] is True
+    assert not root.exists()
+    for table in ("memories", "conversations", "messages", "files", "jobs", "api_tokens", "sessions"):
+        assert platform.db.scalar(f"SELECT COUNT(*) FROM {table} WHERE user_id=?", (u["id"],)) == 0, table
+    assert not [j for j in platform.jobs.jobs.values() if j.user_id == u["id"]]
+    from nextai.api.files import _PREVIEWS
+    assert url.rsplit("/", 1)[-1] not in _PREVIEWS
+    # a leftover folder of a deleted user is swept by housekeeping
+    root.mkdir(parents=True)
+    (root / "left.txt").write_text("x")
+    live = {x["id"] for x in platform.db.query("SELECT id FROM users WHERE state!='deleted'")}
+    assert platform.files.sweep_orphans(live) == [u["id"]] and not root.exists()

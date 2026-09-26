@@ -262,12 +262,8 @@ async def delete_user(user_id: str, body: DeleteBody, ctx: Admin):
         raise ApiError(409, "not_disabled", "完全削除の前にアカウントを「無効化」してください (無効化 → 保持 → 完全削除)")
     if user_id == ctx.uid:
         raise ApiError(409, "self_delete", "自分自身は削除できません")
-    for j in list(p.jobs.jobs.values()):
-        if j.user_id == user_id:
-            p.jobs.cancel(j.id)
-    await asyncio.to_thread(p.files.delete_all, user_id)
-    p.auth.mark_deleted(user_id, actor=ctx.user, ip=ctx.ip)
-    return {"ok": True}
+    files_ok = await p.purge_user(user_id, actor=ctx.user, ip=ctx.ip)
+    return {"ok": True, "files_removed": files_ok}
 
 
 @router.get("/users/{user_id}/avatar")

@@ -127,12 +127,35 @@ class Platform:
             try:
                 await asyncio.to_thread(self.auth.cleanup)
                 for u in await asyncio.to_thread(self.auth.users_due_for_purge):
-                    await asyncio.to_thread(self.files.delete_all, u["id"])
-                    await asyncio.to_thread(self.auth.mark_deleted, u["id"], actor=None, ip=None)
+                    await self.purge_user(u["id"], actor=None, ip=None)
+                live = {r["id"] for r in await asyncio.to_thread(
+                    self.db.query, "SELECT id FROM users WHERE state!='deleted'")}
+                swept = await asyncio.to_thread(self.files.sweep_orphans, live)
+                if swept:
+                    log.info("removed leftover folders of deleted users: %s", swept)
                 await asyncio.to_thread(self.storage.cleanup, False)
             except Exception:  # noqa: BLE001
                 log.exception("housekeeping failed")
             await asyncio.sleep(600)
+
+    async def purge_user(self, user_id: str, *, actor: dict | None, ip: str | None) -> bool:
+        """Complete deletion: every conversation, message, memory, file, sandbox workspace, API key and session of
+        the account, plus in-memory copies (running jobs, job logs, previews). Returns False if some files could
+        not be removed yet (they are retried by the housekeeping sweep)."""
+        for j in list(self.jobs.jobs.values()):
+            if j.user_id == user_id:
+                self.jobs.cancel(j.id)
+        await asyncio.sleep(0)
+        for jid in [jid for jid, j in self.jobs.jobs.items() if j.user_id == user_id]:
+            self.jobs.jobs.pop(jid, None)
+        from .api.files import purge_previews
+
+        purge_previews(user_id)
+        files_ok = await asyncio.to_thread(self.files.delete_all, user_id)
+        await asyncio.to_thread(self.auth.mark_deleted, user_id, actor=actor, ip=ip)
+        if not files_ok:
+            log.warning("some files of deleted user %s are locked; will retry", user_id[:8])
+        return files_ok
 
     async def _watch_stop_flag(self) -> None:
         """The Windows service host requests a graceful stop by creating <data>/run/stop."""

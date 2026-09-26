@@ -134,6 +134,11 @@ class PreviewBody(BaseModel):
     content: str = Field(min_length=1, max_length=2_000_000)
 
 
+def purge_previews(user_id: str) -> None:
+    for k in [k for k, v in _PREVIEWS.items() if v[0] == user_id]:
+        _PREVIEWS.pop(k, None)
+
+
 @preview_router.post("")
 def create_preview(body: PreviewBody, ctx: User):
     now_ = time.time()
