@@ -55,13 +55,15 @@ dotnet build "$ROOT/desktop/NextAI.Setup/NextAI.Setup.csproj" -c Release -nologo
   -p:Version="$VERSION" -p:PayloadZip="$OUT/payload.zip"
 cp "$OUT/setup/NextAI-Platform-Setup.exe" "$DIST/NextAI-Platform-Setup.exe"
 (cd "$DIST" && sha256sum NextAI-Platform-Setup.exe > NextAI-Platform-Setup.exe.sha256)
-python3 - "$DIST" "$VERSION" <<'EOF'
+RELEASE_BASE="${RELEASE_BASE:-https://github.com/ippannjinn/test/releases/download}"
+python3 - "$DIST" "$VERSION" "$RELEASE_BASE" <<'EOF'
 import hashlib, json, sys
 from pathlib import Path
-dist, version = Path(sys.argv[1]), sys.argv[2]
+dist, version, base = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 exe = dist / "NextAI-Platform-Setup.exe"
 manifest = {"version": version, "file": exe.name, "size": exe.stat().st_size,
-            "sha256": hashlib.sha256(exe.read_bytes()).hexdigest(), "url": "", "notes": ""}
+            "sha256": hashlib.sha256(exe.read_bytes()).hexdigest(),
+            "url": f"{base}/v{version}/{exe.name}", "notes": "管理コンソールからワンクリックで更新できます (データ・設定・モデルは保持)"}
 (dist / "update-manifest.json").write_text(json.dumps(manifest, indent=2))
 EOF
 ls -l "$DIST"

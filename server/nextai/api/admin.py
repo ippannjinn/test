@@ -712,7 +712,7 @@ async def update_check(ctx: Admin):
     if not url:
         return {"configured": False, "current": ctx.p.version}
     try:
-        async with httpx.AsyncClient(timeout=15) as c:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as c:
             r = await c.get(url)
             r.raise_for_status()
             m = r.json()

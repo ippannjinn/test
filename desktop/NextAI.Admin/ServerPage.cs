@@ -50,7 +50,7 @@ namespace NextAI.Admin
             ipanel.Controls.Add(Ui.Toolbar(
                 Ui.Btn("ブラウザで開く", (s, e) => Process.Start(new ProcessStartInfo($"https://localhost:{Main.Info.Port}/") { UseShellExecute = true })),
                 Ui.Btn("データフォルダ", (s, e) => OpenFolder(Main.Info.DataDir)),
-                Ui.Btn("アップデート確認", (s, e) => CheckUpdate()),
+                Ui.Btn("アップデート確認 / 更新", (s, e) => CheckUpdate()),
                 Ui.Btn("ディスククリーンアップ", (s, e) => Run(async () => { var r = await Api.PostAsync("/api/admin/cleanup"); MessageBox.Show(this, Json.Serialize(r.Obj("removed")), "クリーンアップ"); }, false))));
 
             var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
@@ -158,14 +158,9 @@ namespace NextAI.Admin
             Run(async () =>
             {
                 var r = await Api.GetAsync("/api/admin/update/check");
-                if (!r.Bool("configured"))
-                {
-                    MessageBox.Show(this, $"現在のバージョン: {r.Str("current")}\n更新情報URL (server.update_manifest_url) が未設定です。\n新しい NextAI-Platform-Setup.exe を実行すると、データを保持したまま更新されます。", "アップデート");
-                    return;
-                }
-                if (!r.Bool("update_available")) { MessageBox.Show(this, $"最新版です ({r.Str("current")})", "アップデート"); return; }
-                if (Ui.Confirm(this, $"新しいバージョン {r.Str("latest")} があります。\n{r.Str("notes")}\n\nダウンロードページを開きますか？ (セットアップを実行するとデータを保持したまま更新されます)", "アップデート"))
-                    Process.Start(new ProcessStartInfo(r.Str("download_url")) { UseShellExecute = true });
+                if (!r.Bool("configured")) { MessageBox.Show(this, $"現在のバージョン: {r.Str("current")}\n更新情報URL (server.update_manifest_url) が未設定です。", "アップデート"); return; }
+                if (!r.Bool("update_available")) { MessageBox.Show(this, $"最新版です (v{r.Str("current")})", "アップデート"); return; }
+                await Updater.InstallAsync(this, r);
             }, false);
         }
 

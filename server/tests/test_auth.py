@@ -174,3 +174,40 @@ def test_admin_api_rejects_proxied_requests(client, platform):
     assert client.get("/api/admin/users", headers=h).status_code == 200
     r = client.get("/api/admin/users", headers={**h, "CF-Connecting-IP": "203.0.113.9"})
     assert r.status_code == 403
+
+
+def test_update_check_follows_redirect_and_compares_versions(client, platform):
+    import http.server
+    import json as _json
+    import threading
+
+    manifest = {"version": "9.0.0", "url": "https://example.com/NextAI-Platform-Setup.exe", "sha256": "a" * 64}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path == "/latest":
+                self.send_response(302)
+                self.send_header("Location", "/v9/update-manifest.json")
+                self.end_headers()
+                return
+            body = _json.dumps(manifest).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        create_admin(platform)
+        h = admin_token(client)
+        platform.settings.set_override("server.update_manifest_url", f"http://127.0.0.1:{srv.server_address[1]}/latest")
+        r = client.get("/api/admin/update/check", headers=h).json()
+        assert r["update_available"] and r["latest"] == "9.0.0" and r["sha256"] == "a" * 64
+        manifest["version"] = platform.version
+        assert client.get("/api/admin/update/check", headers=h).json()["update_available"] is False
+    finally:
+        srv.shutdown()

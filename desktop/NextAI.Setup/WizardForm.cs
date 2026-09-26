@@ -14,6 +14,7 @@ namespace NextAI.Setup
     sealed class WizardForm : Form
     {
         public static bool Force;
+        public static bool UpdateMode;
         readonly InstallOptions opt = new InstallOptions();
         readonly string version = Payload.Version();
         readonly Panel content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(24, 18, 24, 8), BackColor = Color.White };
@@ -79,15 +80,29 @@ namespace NextAI.Setup
             next.Click += (s, e) => Next();
             cancel.Click += (s, e) => Close();
             FormClosing += OnClosing;
+            Shown += (s, e) => { if (pages[page].title == "インストール" && !installing && !installOk) StartInstall(); };
 
             Controls.Add(content);
             Controls.Add(footer);
             Controls.Add(side);
 
-            AddPage("ようこそ", WelcomePage(), null);
-            AddPage("システム診断", CheckPage(), LeaveCheck);
-            AddPage("インストール設定", OptionsPage(), LeaveOptions);
-            if (!opt.Upgrade) AddPage("管理者アカウント", AdminPage(), LeaveAdmin);
+            var quick = UpdateMode && opt.Upgrade;
+            if (quick)
+            {
+                // Unattended update: keep every existing setting, model set and all data.
+                opt.SkipModels = true;
+                opt.Set = Catalog.Load(0, 0, 0).FirstOrDefault(s => s.Id == existing.ModelSet);
+                opt.Lan = !IsLocalOnly(existing.DataDir);
+                opt.ServerName = ReadServerName(existing.DataDir) ?? opt.ServerName;
+                Text = $"NextAI Platform を v{version} に更新しています";
+            }
+            else
+            {
+                AddPage("ようこそ", WelcomePage(), null);
+                AddPage("システム診断", CheckPage(), LeaveCheck);
+                AddPage("インストール設定", OptionsPage(), LeaveOptions);
+                if (!opt.Upgrade) AddPage("管理者アカウント", AdminPage(), LeaveAdmin);
+            }
             AddPage("インストール", InstallPage(), null);
             AddPage("完了", FinishPage(), null);
             foreach (var p in pages)
@@ -97,6 +112,19 @@ namespace NextAI.Setup
                 nav.Controls.Add(l);
             }
             Go(0);
+        }
+
+        static string ConfigText(string dataDir)
+        {
+            try { return File.ReadAllText(Path.Combine(dataDir, "config.toml")); } catch { return ""; }
+        }
+
+        static bool IsLocalOnly(string dataDir) => Regex.IsMatch(ConfigText(dataDir), @"^\s*host\s*=\s*""127\.0\.0\.1""", RegexOptions.Multiline);
+
+        static string ReadServerName(string dataDir)
+        {
+            var m = Regex.Match(ConfigText(dataDir), @"^\s*name\s*=\s*""([^""]*)""", RegexOptions.Multiline);
+            return m.Success ? m.Groups[1].Value : null;
         }
 
         void AddPage(string title, Panel panel, Func<bool> leave)
@@ -127,7 +155,7 @@ namespace NextAI.Setup
             next.Enabled = title != "インストール";
             cancel.Enabled = title != "完了";
             if (title == "システム診断" && probe == null) RunProbe();
-            if (title == "インストール" && !installing) StartInstall();
+            if (title == "インストール" && !installing && IsHandleCreated) StartInstall();
         }
 
         bool NextIsInstall() => page + 1 < pages.Count && pages[page + 1].title == "インストール";

@@ -11,7 +11,8 @@ namespace NextAI.Admin
         public readonly InstallInfo Info;
         public readonly ApiClient Api;
         readonly TabControl tabs;
-        readonly ToolStripStatusLabel connLabel, svcLabel, userLabel, verLabel;
+        readonly ToolStripStatusLabel connLabel, svcLabel, userLabel, verLabel, updateLabel;
+        JObject pendingUpdate;
         readonly Timer timer;
         int ticks;
         bool refreshing;
@@ -43,7 +44,13 @@ namespace NextAI.Admin
             svcLabel = new ToolStripStatusLabel("サービス: -");
             userLabel = new ToolStripStatusLabel($"管理者: {api.User?.Str("display_name")} ({api.User?.Str("username")})");
             verLabel = new ToolStripStatusLabel(info.Version == "" ? "" : "v" + info.Version) { Spring = true, TextAlign = ContentAlignment.MiddleRight };
-            strip.Items.AddRange(new ToolStripItem[] { connLabel, new ToolStripSeparator(), svcLabel, new ToolStripSeparator(), userLabel, verLabel });
+            updateLabel = new ToolStripStatusLabel("") { IsLink = true, Visible = false, ForeColor = Ui.Accent };
+            updateLabel.Click += async (s, e) =>
+            {
+                if (pendingUpdate == null) return;
+                try { await Updater.InstallAsync(this, pendingUpdate); } catch (Exception ex) { Ui.Error(this, ex); }
+            };
+            strip.Items.AddRange(new ToolStripItem[] { connLabel, new ToolStripSeparator(), svcLabel, new ToolStripSeparator(), userLabel, updateLabel, verLabel });
 
             Controls.Add(tabs);
             Controls.Add(strip);
@@ -51,13 +58,26 @@ namespace NextAI.Admin
             if (startPage == "server") tabs.SelectedTab = pages[5];
             timer = new Timer { Interval = 2000 };
             timer.Tick += async (s, e) => await Tick();
-            Shown += async (s, e) => { await RefreshCurrent(); timer.Start(); };
+            Shown += async (s, e) => { await RefreshCurrent(); timer.Start(); await CheckForUpdate(); };
             FormClosing += async (s, e) => { timer.Stop(); await Api.LogoutAsync(); };
+        }
+
+        async Task CheckForUpdate()
+        {
+            try
+            {
+                pendingUpdate = await Updater.CheckAsync(Api);
+                if (pendingUpdate == null) return;
+                updateLabel.Text = $"⬆ v{pendingUpdate.Str("latest")} に更新できます (クリックで更新)";
+                updateLabel.Visible = true;
+            }
+            catch (Exception) { /* offline or no release yet: stay quiet */ }
         }
 
         async Task Tick()
         {
             ticks++;
+            if (ticks % 10800 == 0 && pendingUpdate == null) await CheckForUpdate();
             if (ticks % 3 == 0)
             {
                 var st = WinService.Status();

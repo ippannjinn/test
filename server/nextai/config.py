@@ -24,7 +24,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "max_upload_mb": 50,
         "max_json_kb": 2048,
         "login_message": "",
-        "update_manifest_url": "",
+        "update_manifest_url": "https://github.com/ippannjinn/test/releases/latest/download/update-manifest.json",
     },
     "auth": {
         "session_idle_minutes": 720,

@@ -49,6 +49,7 @@ namespace NextAI.Setup
                 return 1;
             }
             WizardForm.Force = args.Any(a => a.Equals("/force", StringComparison.OrdinalIgnoreCase));
+            WizardForm.UpdateMode = args.Any(a => a.Equals("/update", StringComparison.OrdinalIgnoreCase));
             Application.Run(new WizardForm());
             return 0;
         }
