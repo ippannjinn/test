@@ -161,7 +161,9 @@ class ProfileEngine:
         prof.temperature = pol["temperature"] if a.task_type not in ("coding", "project") else min(pol["temperature"], 0.4)
         prof.tool_parallelism = pol["tool_parallelism"]
         tools: list[str] = []
-        if a.needs_web and self.web_enabled_fn():
+        web = self.web_enabled_fn()
+        if web and (a.needs_web or (a.complexity > 0.05 and a.task_type not in ("translation",) and not a.is_media)):
+            # like the cloud assistants: search is always at hand; the model decides when it needs it
             tools += ["web_search", "web_fetch"]
         sandbox = self.sandbox_enabled_fn()
         if sandbox and (a.needs_code_exec or (a.task_type in ("coding", "reasoning") and t >= 0.6)):

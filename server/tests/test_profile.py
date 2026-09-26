@@ -136,3 +136,11 @@ def test_model_set_selection():
     assert cat.select_set(vram_gb=0, ram_gb=16, disk_free_gb=40)["selected"] == "minimal"
     std = cat.set_by_id("rtx12g-standard")
     assert cat.set_size_gb(std) + 15 < 131
+
+
+def test_web_search_is_always_available_for_real_questions(engine):
+    eng, *_ = engine
+    q = eng.decide(analyze("北海道で一番高い山の標高はどれくらいですか？"))
+    assert "web_search" in q.tools and "web_fetch" in q.tools and q.use_agent
+    assert "web_search" not in eng.decide(analyze("こんにちは")).tools
+    assert "web_search" not in eng.decide(analyze("この文を英語に翻訳して: おはよう")).tools
