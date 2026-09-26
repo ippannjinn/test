@@ -244,7 +244,7 @@ async function logout(forget = false) {
 
 // ---------------------------------------------------------------- app shell
 let shell;
-const NAV = [["chat", "チャット", "newchat"], ["create", "画像・動画・音楽", "image"], ["files", "ファイル", "file"], ["memory", "メモリ", "brain"], ["settings", "設定", "settings"]];
+const NAV = [["chat", "チャット", "newchat"], ["files", "ファイル", "file"], ["memory", "メモリ", "brain"], ["settings", "設定", "settings"]];
 
 function showApp() {
   app.className = "";
@@ -321,7 +321,6 @@ function route() {
   shell.headerRight.replaceChildren();
   loadConvs();
   if (S.view === "chat") openChat(id || null);
-  else if (S.view === "create") viewCreate();
   else if (S.view === "files") viewFiles();
   else if (S.view === "memory") viewMemory();
   else viewSettings();
@@ -499,7 +498,7 @@ function assetEl(a) {
 
 function metaInfo(meta) {
   const p = meta?.profile || {};
-  const parts = [p.label, meta?.model_name, ...(meta?.tools || []).map((t) => `🔧 ${t}`), meta?.duration ? `${meta.duration}s` : null].filter(Boolean);
+  const parts = [p.label, meta?.model_name, ...(meta?.tools || []).map((t) => `🔧 ${TOOL_LABEL[t] || t}`), meta?.duration ? `${meta.duration}s` : null].filter(Boolean);
   if (!parts.length) return null;
   return h("span", { class: "meta-info", title: (p.reasons || []).join("\n") }, parts.join(" · "));
 }
@@ -598,6 +597,8 @@ async function send() {
 }
 
 const PHASE = { plan: "計画中", act: "実行中", verify: "検証中" };
+const TOOL_LABEL = { generate_image: "画像を生成", generate_video: "動画を生成", generate_music: "音楽を作曲", web_search: "Web検索", web_fetch: "ページを読む",
+  run_code: "コードを実行", read_file: "ファイルを読む", write_file: "ファイルを書く", memory_search: "記憶を検索", memory_save: "記憶を保存" };
 function attachLive(jobId) {
   S.activeJob = jobId; updateSend();
   const statusLine = h("span", { class: "shimmer" }, "考えています…");
@@ -632,7 +633,7 @@ function attachLive(jobId) {
   });
   on("step", (s) => { statusLine.textContent = `${PHASE[s.phase] || s.phase}… (ステップ ${s.n}/${s.max})`; statusLine.parentElement.hidden = false; });
   on("plan", (p) => addStep("📋 計画:\n" + p.text));
-  on("tool_call", (t) => { addStep(`🔧 ${t.name} ${t.args ? t.args.slice(0, 120) : ""}`); statusLine.textContent = `${t.name} を実行中…`; statusLine.parentElement.hidden = false; });
+  on("tool_call", (t) => { addStep(`🔧 ${TOOL_LABEL[t.name] || t.name} ${t.args ? t.args.slice(0, 120) : ""}`); statusLine.textContent = `${TOOL_LABEL[t.name] || t.name}しています…`; statusLine.parentElement.hidden = false; });
   on("tool_result", (t) => addStep(`${t.ok ? "✓" : "✗"} ${t.name}: ${(t.summary || "").slice(0, 160)}`));
   on("verify", (v) => addStep(v.result === "pass" ? "✓ 検証OK" : "✗ 検証で問題を検出 → 修正中"));
   on("notice", (n) => addStep("ℹ " + n.message));
@@ -670,78 +671,17 @@ function attachLive(jobId) {
   es.onerror = () => { if (es.readyState === EventSource.CLOSED) { S.streams.delete(jobId); if (S.activeJob === jobId) { S.activeJob = null; updateSend(); } } };
 }
 
-// ---------------------------------------------------------------- create (image / video / music)
-let createKind = "image";
-async function viewCreate() {
-  const wrap = h("div", { class: "view-inner" });
-  shell.main.replaceChildren(wrap);
-  let caps;
-  try { caps = await api("/api/generate/capabilities"); } catch (e) { wrap.append(h("p", { class: "error" }, e.message)); return; }
-  const tabs = h("div", { class: "tabs" }, [["image", "画像"], ["video", "動画"], ["music", "音楽"]].map(([k, l]) =>
-    h("button", { class: createKind === k ? "active" : "", onclick: () => { createKind = k; viewCreate(); } }, l)));
-  const c = caps[createKind];
-  const prompt = h("textarea", { class: "input", rows: 3, placeholder: { image: "例: 桜並木を歩く猫、水彩画風", video: "例: 波が打ち寄せる砂浜、夕暮れ", music: "例: 落ち着いたローファイ・ピアノ" }[createKind] });
-  const params = h("div", { class: "grid2" });
-  const fields = {};
-  const sel = (key, label, opts, val) => { fields[key] = h("select", { class: "input" }, opts.map(([v, t]) => h("option", { value: v }, t))); fields[key].value = String(val); params.append(h("label", { class: "field" }, h("span", {}, label), fields[key])); };
-  if (createKind === "image") {
-    const max = c.limits.max_side;
-    sel("size", "サイズ", [[512, "512×512 (速い)"], [768, "768×768"], [1024, "1024×1024"]].filter(([v]) => v <= max), Math.min(768, max));
-  } else if (createKind === "video") {
-    sel("frames", "長さ", [[17, "約1秒"], [33, "約2秒"], [49, "約3秒"]].filter(([v]) => v <= c.limits.max_frames), 17);
-    sel("width", "解像度", [[480, "480×272 (速い)"], [832, "832×480"]].filter(([v]) => v <= c.limits.max_side), 480);
-  } else {
-    sel("seconds", "長さ", [[8, "8秒"], [15, "15秒"], [30, "30秒"]].filter(([v]) => v <= c.limits.max_seconds), 8);
-  }
-  const mode = h("select", { class: "input" }, h("option", { value: "auto" }, "自動"), h("option", { value: "fast" }, "速さ優先"), h("option", { value: "quality" }, "品質優先"));
-  params.append(h("label", { class: "field" }, h("span", {}, "モード"), mode));
-  const out = h("div");
-  const btn = h("button", { class: "btn primary", disabled: !c.available, onclick: async () => {
-    if (!prompt.value.trim()) return;
-    const p = {};
-    if (createKind === "image") { p.width = +fields.size.value; p.height = +fields.size.value; }
-    if (createKind === "video") { p.frames = +fields.frames.value; p.width = +fields.width.value; p.height = Math.round(+fields.width.value * 480 / 832 / 16) * 16; }
-    if (createKind === "music") p.seconds = +fields.seconds.value;
-    btn.disabled = true;
-    try {
-      const d = await api(`/api/generate/${createKind}`, { method: "POST", body: { prompt: prompt.value.trim(), params: p, mode: mode.value } });
-      trackGeneration(d.job.id, out, () => { btn.disabled = false; loadGallery(gallery); });
-    } catch (e) { toast(e.message); btn.disabled = false; }
-  } }, "生成する");
-  const gallery = h("div", { class: "gallery" });
-  wrap.append(h("h2", {}, "画像・動画・音楽の生成"), tabs,
-    h("div", { class: "card" },
-      c.available ? null : h("p", { class: "error" }, "この生成機能は現在利用できません (モデル未インストール)"),
-      h("div", { class: "notice" }, c.notice, c.models?.[0] ? ` モデル: ${c.models[0].name} (${c.models[0].license})` : ""),
-      h("label", { class: "field" }, h("span", {}, "内容 (日本語でOK)"), prompt), params,
-      h("div", { class: "row" }, h("span", { class: "muted small" }, `1回あたり生成クォータ ${c.cost} 消費`), h("div", { class: "spacer" }), btn), out),
-    h("h3", {}, "これまでの生成物"), gallery);
-  loadGallery(gallery);
-}
-
-function trackGeneration(jobId, out, done) {
-  const line = h("div", { class: "muted small" }, "キューに登録しました…");
-  const prog = h("div", { class: "progress" }, h("div"));
-  const res = h("div", { class: "assets" });
-  out.replaceChildren(h("div", { class: "live" }, line, prog), res);
-  const es = new EventSource(`/api/jobs/${jobId}/events`);
-  const on = (t, fn) => es.addEventListener(t, (ev) => fn(JSON.parse(ev.data)));
-  on("queue", (q) => { line.textContent = q.started ? "生成中…" : q.model_state === "loading" ? "モデル準備中…" : `待ち順位 ${q.position ?? "-"} / 推定 ${fmtSecs(q.eta_seconds || 0)}`; });
-  on("progress", (p) => { prog.firstChild.style.width = `${Math.round((p.value || 0) * 100)}%`; if (p.message) line.textContent = p.message; });
-  on("tool_result", (t) => { if (t.name === "prompt_refine") line.textContent = `プロンプト: ${t.summary}`; });
-  on("asset", (a) => res.append(assetEl({ id: a.file_id, name: a.name, mime: a.mime })));
-  on("done", (d) => { es.close(); line.textContent = d.status === "done" ? "完了しました" : `失敗: ${d.error || d.status}`; line.className = d.status === "done" ? "muted small" : "error"; done(); });
-}
-
+// ---------------------------------------------------------------- generated media gallery (shown in Files)
 async function loadGallery(el) {
   try {
     const files = (await api("/api/files?kind=generated&limit=60")).files;
     el.replaceChildren(...files.map((f) => h("div", { class: "g" },
       f.mime.startsWith("image/") ? h("a", { href: `/api/files/${f.id}/content`, target: "_blank", rel: "noopener" }, h("img", { src: `/api/files/${f.id}/content`, loading: "lazy", alt: f.name }))
+        : f.mime.startsWith("video/") ? h("video", { controls: true, src: `/api/files/${f.id}/content`, preload: "metadata" })
         : f.mime.startsWith("audio/") ? h("audio", { controls: true, src: `/api/files/${f.id}/content`, preload: "none" })
           : h("a", { class: "file-link", href: `/api/files/${f.id}/content?download=1` }, "⬇ ", f.name),
       h("div", { class: "cap", title: f.meta?.prompt || f.name }, f.meta?.prompt || f.name))));
-    if (!files.length) el.replaceChildren(h("p", { class: "muted" }, "まだありません"));
+    if (!files.length) el.replaceChildren(h("p", { class: "muted small" }, "まだありません"));
   } catch { /* ignore */ }
 }
 
@@ -759,10 +699,15 @@ async function viewFiles() {
   let d;
   try { d = await api("/api/files?limit=500"); } catch (e) { wrap.append(h("p", { class: "error" }, e.message)); return; }
   const pct = Math.min(100, (d.used_mb / Math.max(1, d.quota_mb)) * 100);
+  const gallery = h("div", { class: "gallery" });
+  loadGallery(gallery);
   wrap.append(h("div", { class: "row" }, h("h2", {}, "ファイル"), h("div", { class: "spacer" }), h("button", { class: "btn primary", onclick: () => input.click() }, "アップロード"), input),
     h("div", { class: "card" }, h("div", { class: "row small" }, `使用量 ${d.used_mb}MB / ${d.quota_mb}MB`), h("div", { class: "meter" }, h("div", {})),
-      h("p", { class: "muted small" }, "PDF・Word・Excel・PowerPoint・テキスト・コード・画像を解析できます。チャットの📎からも添付できます。")),
-    h("h3", {}, "一覧"),
+      h("p", { class: "muted small" }, "PDF・Word・Excel・PowerPoint・テキスト・コード・画像を解析できます。チャットの「＋」からも添付できます。")),
+    h("h3", {}, "生成したメディア"),
+    h("p", { class: "muted small" }, "画像・動画・音楽はチャットで頼むと AI が生成します (例: 「夕焼けの海辺のイラストを描いて」「落ち着いたBGMを作曲して」)。"),
+    gallery,
+    h("h3", {}, "すべてのファイル"),
     h("div", { class: "list" }, d.files.length ? d.files.map((f) => h("div", { class: "item" },
       h("div", { class: "grow" }, h("div", { class: "title" }, f.name), h("div", { class: "muted small" }, `${fmtBytes(f.size)} · ${f.kind === "generated" ? "生成物" : "アップロード"} · ${fmtTime(f.created_at)}`)),
       h("button", { class: "btn small", onclick: () => { S.attach = [f]; go("chat"); } }, "チャットで使う"),

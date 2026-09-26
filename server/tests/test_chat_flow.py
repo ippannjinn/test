@@ -203,3 +203,55 @@ def test_regenerate_and_edit(client, platform):
     wait_job(client, e["job"]["id"])
     msgs = client.get(f"/api/conversations/{cid}").json()["messages"]
     assert [m["content"] for m in msgs if m["role"] == "user"] == ["編集後"] and len(msgs) == 2
+
+
+def _chat(client, text):
+    from conftest import wait_job
+
+    r = client.post("/api/conversations/new/messages", json={"content": text}).json()
+    job = wait_job(client, r["job"]["id"], timeout=30)
+    msgs = client.get(f"/api/conversations/{r['conversation_id']}").json()["messages"]
+    return job, msgs[-1]
+
+
+def test_media_generation_is_an_llm_tool(client, platform):
+    from conftest import create_member, web_login
+
+    create_member(platform, "artist")
+    web_login(client, "artist")
+    job, msg = _chat(client, "夕焼けの海辺のイラストを生成して")
+    assert job["status"] == "done", job
+    assert "generate_image" in msg["meta"]["tools"]
+    assert msg["meta"]["assets"] and msg["meta"]["assets"][0]["mime"].startswith("image/")
+    assert msg["meta"]["model_id"] and "flux" not in msg["meta"]["model_id"]  # the reply comes from the LLM
+    usage = client.get("/api/account/usage").json()
+    assert usage["generation_used_today"] > 0
+    job, msg = _chat(client, "落ち着いたピアノのBGMを作曲して")
+    assert "generate_music" in msg["meta"]["tools"] and msg["meta"]["assets"][0]["mime"] == "audio/wav"
+
+
+def test_media_fallback_when_model_skips_the_tool(client, platform, monkeypatch):
+    from conftest import create_member, web_login
+    from nextai.backends.mock import MockLLMBackend
+
+    orig = MockLLMBackend.chat
+
+    def no_tools(self, instance, spec, req):
+        req.tools = None
+        return orig(self, instance, spec, req)
+
+    monkeypatch.setattr(MockLLMBackend, "chat", no_tools)
+    create_member(platform, "artist2")
+    web_login(client, "artist2")
+    job, msg = _chat(client, "猫のイラストを描いて")
+    assert job["status"] == "done", job
+    assert msg["meta"]["assets"] and "画像を生成しました" in msg["content"]
+
+
+def test_media_quota_is_enforced_inside_the_tool(client, platform):
+    from conftest import create_member, web_login
+
+    create_member(platform, "poor", generation_quota_daily=0)
+    web_login(client, "poor")
+    job, msg = _chat(client, "犬の画像を生成して")
+    assert job["status"] == "done" and not msg["meta"]["assets"]

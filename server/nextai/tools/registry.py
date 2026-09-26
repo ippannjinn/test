@@ -229,8 +229,91 @@ class MemorySave(Tool):
         return ToolResult(True, f"記憶しました: {row['content'][:200]}")
 
 
+_ASPECT = {"type": "string", "enum": ["square", "landscape", "portrait"],
+           "description": "square (1:1), landscape (16:9-ish) or portrait (9:16-ish)"}
+
+
+class GenerateMedia(Tool):
+    """Image / video / music generation as a tool: the LLM writes the prompt and picks parameters, the platform
+    runs the generator through the GPU scheduler (queue, fairness, VRAM swap) and shows the result to the user."""
+
+    SPECS = {
+        "image": ("generate_image", "画像",
+                  "Generate an image with the local image model and show it to the user. Use whenever the user asks "
+                  "for a picture, illustration, photo, icon, logo, wallpaper, etc. Write `prompt` in English as a "
+                  "detailed visual description (subject, style, composition, lighting, colors).",
+                  {"prompt": {"type": "string"}, "negative_prompt": {"type": "string", "description": "things to avoid"},
+                   "aspect": _ASPECT, "seed": {"type": "integer"}}),
+        "video": ("generate_video", "動画",
+                  "Generate a short video clip (a few seconds, low resolution, local GPU) and show it to the user. "
+                  "Write `prompt` in English describing the scene and the motion.",
+                  {"prompt": {"type": "string"}, "negative_prompt": {"type": "string"}, "aspect": _ASPECT,
+                   "seconds": {"type": "number", "minimum": 1, "maximum": 5}, "seed": {"type": "integer"}}),
+        "music": ("generate_music", "音楽",
+                  "Compose instrumental music / BGM (no vocals) with the local music model and give it to the user. "
+                  "Write `prompt` in English: genre, mood, instruments, tempo.",
+                  {"prompt": {"type": "string"}, "seconds": {"type": "number", "minimum": 2, "maximum": 30}}),
+    }
+
+    def __init__(self, kind: str):
+        self.kind = kind
+        self.name, self.label, self.description, props = self.SPECS[kind]
+        self.parameters = {"type": "object", "properties": props, "required": ["prompt"]}
+        self.timeout = 1900.0 if kind == "video" else 960.0
+
+    async def run(self, ctx, args):
+        from ..jobs import AdmissionError
+        from ..models.manager import ModelUnavailable
+        from ..profile.analyzer import analyze
+        from ..runners.media import run_media
+        from ..util import day_key
+
+        p, user, kind = ctx.platform, ctx.user, self.kind
+        prompt = str(args.get("prompt", "")).strip()
+        if not prompt:
+            return ToolResult(False, "prompt が空です")
+        cost = float(getattr(p.settings.generation, f"{kind}_cost"))
+        used = float(p.db.scalar("SELECT generation_units FROM usage_daily WHERE user_id=? AND day=?",
+                                 (user["id"], day_key())) or 0)
+        if used + cost > user["generation_quota_daily"]:
+            return ToolResult(False, f"本日の生成クォータ ({user['generation_quota_daily']}) を超えるため生成できません。"
+                                     "ユーザーに明日以降の利用か管理者への相談を伝えてください。")
+        a = analyze(prompt, mode=(ctx.job.request or {}).get("mode", "auto"))
+        a.task_type = f"{kind}_gen"
+        prof = p.profiles.decide_media(a)
+        if not prof.model_id:
+            return ToolResult(False, f"{self.label}生成モデルがインストールされていないため生成できません")
+        over: dict = {"raw_prompt": prompt.isascii()}  # English prompts from the LLM are used as-is
+        if args.get("negative_prompt"):
+            over["negative"] = str(args["negative_prompt"])[:500]
+        if args.get("seed"):
+            over["seed"] = int(args["seed"])
+        base = prof.media
+        if kind in ("image", "video") and args.get("aspect") in ("landscape", "portrait"):
+            long_side = max(int(base.get("width", 768)), int(base.get("height", 768)))
+            short = long_side * 9 // 16
+            over["width"], over["height"] = (long_side, short) if args["aspect"] == "landscape" else (short, long_side)
+        elif kind in ("image", "video") and args.get("aspect") == "square":
+            side = min(int(base.get("width", 768)), int(base.get("height", 768)))
+            over["width"] = over["height"] = side
+        if kind == "video" and args.get("seconds"):
+            over["frames"] = int(float(args["seconds"]) * int(base.get("fps", 16))) + 1
+        if kind == "music" and args.get("seconds"):
+            over["seconds"] = float(args["seconds"])
+        try:
+            rows = await run_media(p, ctx.job, user, prof, prompt, overrides=over)
+        except (ModelUnavailable, AdmissionError) as e:
+            return ToolResult(False, getattr(e, "message", None) or str(e))
+        ctx.assets.extend(rows)
+        names = ", ".join(r["name"] for r in rows)
+        return ToolResult(bool(rows), f"{self.label}を生成し、ユーザーの画面に表示しました ({names}, モデル: {prof.model_name})。"
+                                      "回答では生成した内容を短く説明してください (ファイルのリンクやマークダウン画像は不要)。",
+                          {"files": [r["id"] for r in rows]})
+
+
 ALL_TOOLS: dict[str, Tool] = {t.name: t for t in (WebSearch(), WebFetch(), RunCode(), ReadFile(), WriteFile(),
-                                                  ReadWorkspace(), ListWorkspace(), MemorySearch(), MemorySave())}
+                                                  ReadWorkspace(), ListWorkspace(), MemorySearch(), MemorySave(),
+                                                  GenerateMedia("image"), GenerateMedia("video"), GenerateMedia("music"))}
 
 
 def schemas(names: list[str]) -> list[dict]:

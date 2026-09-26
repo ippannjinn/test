@@ -124,14 +124,24 @@ class ProfileEngine:
         prof = Profile(task_type=a.task_type, tuning=round(t, 3), label=tuning_label(t), complexity=a.complexity,
                        model_id=None, quality_pinned=pinned, congestion=round(congestion, 3), pressure=gs.level.name,
                        reasons=reasons)
-        if a.is_media:
-            return self._media_profile(prof, a)
         self._apply_policy(prof, a)
         self._choose_model(prof, a)
         if pinned and congestion > 0.3:
             prof.wait_for_quality = True
             prof.reasons.append("混雑中ですが品質指定のため本来の設定で順番待ちします")
         return prof
+
+    def decide_media(self, a: TaskAnalysis) -> Profile:
+        """Profile for one media generation (called by the generate_* tools and the /api/generate endpoint):
+        same tuning as decide(), but picks the image/video/music model and its parameters."""
+        chat = self.decide(a)
+        prof = Profile(task_type=a.task_type, tuning=chat.tuning, label=chat.label, complexity=a.complexity, model_id=None,
+                       quality_pinned=chat.quality_pinned, congestion=chat.congestion, pressure=chat.pressure,
+                       reasons=[r for r in chat.reasons if "ロード予定" not in r])
+        return self._media_profile(prof, a)
+
+    def media_tools(self) -> list[str]:
+        return [f"generate_{k}" for k in ("image", "video", "music") if self.manager.usable_models((k,))]
 
     def _apply_policy(self, prof: Profile, a: TaskAnalysis) -> None:
         t, p = prof.tuning, self.settings.profile
@@ -154,13 +164,27 @@ class ProfileEngine:
             tools.append("memory_search")
         if a.memory_op or t >= 0.6:
             tools.append("memory_save")
+        media = self.media_tools()
+        if a.is_media:
+            # Media requests go through the LLM, which calls the generate_* tool with a prompt and parameters.
+            wanted = f"generate_{MEDIA_KIND[a.task_type]}"
+            tools = ([wanted] if wanted in media else []) + [m for m in media if m != wanted] + tools
+            if wanted not in media:
+                prof.reasons.append(f"{MEDIA_KIND[a.task_type]} 生成モデルが利用できません")
+        elif any(not x.startswith("memory_") for x in tools):
+            tools += media  # agent turns may also illustrate / score what they produce
         prof.tools = list(dict.fromkeys(tools))
         substantive = [x for x in prof.tools if not x.startswith("memory_")]
         prof.use_agent = bool(substantive) or (bool(prof.tools) and t >= 0.6)
-        prof.plan = prof.use_agent and (t >= p.autonomous_above or a.task_type == "project" or a.multi_step and t >= 0.5)
-        prof.verify = prof.use_agent and (t >= p.verify_above or a.task_type == "project")
+        prof.plan = prof.use_agent and not a.is_media and (t >= p.autonomous_above or a.task_type == "project" or a.multi_step and t >= 0.5)
+        prof.verify = prof.use_agent and not a.is_media and (t >= p.verify_above or a.task_type == "project")
         steps = pol["max_steps"] if prof.use_agent else 1
-        prof.limits = {"max_steps": steps, "max_seconds": pol["max_seconds"], "max_tool_calls": pol["max_tool_calls"],
+        max_seconds = pol["max_seconds"]
+        if any(x.startswith("generate_") for x in prof.tools):
+            g = self.settings.generation
+            max_seconds = max(max_seconds, g.video_timeout_seconds if "generate_video" in prof.tools else 900)
+        prof.limits = {"max_steps": max(steps, 3) if a.is_media else steps, "max_seconds": max_seconds,
+                       "max_tool_calls": max(pol["max_tool_calls"], 2) if a.is_media else pol["max_tool_calls"],
                        "max_consecutive_failures": p.max_consecutive_failures, "max_total_tokens": p.max_total_tokens}
         prof.priority_class = "interactive" if t < 0.4 else "standard" if t < 0.75 else "batch"
         if prof.quality_pinned and prof.priority_class == "batch":

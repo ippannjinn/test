@@ -101,10 +101,18 @@ def test_reevaluation_escalates_and_lightens(engine):
 
 def test_media_profile(engine):
     eng, *_ = engine
-    p = eng.decide(analyze("夜景の写真風の画像を生成して"))
+    # chat turn: an LLM drives it and gets the generate_* tool (plus the other media tools)
+    chat = eng.decide(analyze("夜景の写真風の画像を生成して"))
+    assert chat.model_id and eng.manager.catalog.get(chat.model_id).kind == "llm"
+    assert chat.use_agent and chat.tools[0] == "generate_image" and "generate_music" in chat.tools
+    assert not chat.plan and not chat.verify and chat.limits["max_seconds"] >= 900
+    # the tool's own profile picks the media model and parameters
+    p = eng.decide_media(analyze("夜景の写真風の画像を生成して"))
     assert p.model_id == "flux1-schnell" and p.media["width"] <= 1024 and p.residency == "transient"
-    v = eng.decide(analyze("花が咲く動画を作って"))
+    v = eng.decide_media(analyze("花が咲く動画を作って"))
     assert v.media["frames"] <= 49 and v.priority_class == "batch"
+    # plain chat gets no media tools
+    assert not any(t.startswith("generate_") for t in eng.decide(analyze("こんにちは")).tools)
 
 
 def test_moe_planner_offloads_experts():

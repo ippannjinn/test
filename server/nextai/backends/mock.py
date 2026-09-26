@@ -70,6 +70,15 @@ class MockLLMBackend(LLMBackend):
             n_tool_msgs = sum(1 for m in req.messages if m["role"] == "tool")
             if req.tools:
                 directives = _TOOL_DIRECTIVE.findall(text)
+                if not directives and not n_tool_msgs:
+                    # behave like a real model with media tools: pick the matching generate_* tool
+                    from ..profile.analyzer import R_IMAGE, R_MUSIC, R_VIDEO
+
+                    names = {t.get("function", {}).get("name") for t in req.tools}
+                    for rx, tool in ((R_VIDEO, "generate_video"), (R_MUSIC, "generate_music"), (R_IMAGE, "generate_image")):
+                        if tool in names and rx.search(text):
+                            directives = [(tool, json.dumps({"prompt": f"mock prompt: {text[:80]}"}, ensure_ascii=False))]
+                            break
                 if n_tool_msgs < len(directives):
                     name, args = directives[n_tool_msgs]
                     call_id = f"call_{n_tool_msgs}"
