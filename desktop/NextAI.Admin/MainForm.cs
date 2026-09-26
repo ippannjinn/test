@@ -74,6 +74,13 @@ namespace NextAI.Admin
             catch (Exception) { /* offline or no release yet: stay quiet */ }
         }
 
+        bool? lastHealth;
+        string lastSvc;
+
+        public static string ServiceText(string st) =>
+            st == "Running" ? "実行中" : st == "Stopped" ? "停止中" : st == "StartPending" ? "起動中" : st == "StopPending" ? "停止処理中"
+            : st == "NotInstalled" ? "未登録" : st;
+
         async Task Tick()
         {
             ticks++;
@@ -81,8 +88,18 @@ namespace NextAI.Admin
             if (ticks % 3 == 0)
             {
                 var st = WinService.Status();
-                svcLabel.Text = "サービス: " + (st == "Running" ? "実行中" : st == "Stopped" ? "停止中" : st == "NotInstalled" ? "未登録" : st);
+                svcLabel.Text = "サービス: " + ServiceText(st);
                 svcLabel.ForeColor = st == "Running" ? Ui.Ok : Ui.Bad;
+                // The status bar and the open page must agree: probe health here too, and when the service
+                // or connection state changes, reload the current page instead of leaving stale values on screen.
+                var ok = await Api.HealthAsync();
+                if (ok != lastHealth || st != lastSvc)
+                {
+                    lastHealth = ok;
+                    lastSvc = st;
+                    SetConnected(ok, ok ? null : (st == "Running" ? "サーバーが応答しません (起動中の可能性)" : "サービスが停止しています"));
+                    if (tabs.SelectedTab is AdminPage cur && !cur.AutoRefresh) await RefreshPage(cur, true);
+                }
             }
             if (tabs.SelectedTab is AdminPage p && p.AutoRefresh) await RefreshPage(p, true);
         }

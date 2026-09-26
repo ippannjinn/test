@@ -21,6 +21,23 @@ class MessageBody(BaseModel):
     content: str = Field(min_length=1, max_length=40000)
     attachments: list[str] = Field(default_factory=list, max_length=10)
     mode: Literal["auto", "fast", "quality"] = "auto"
+    replace_from: str | None = Field(default=None, max_length=64)  # edit: drop this message and everything after
+
+
+class RegenBody(BaseModel):
+    mode: Literal["auto", "fast", "quality"] = "auto"
+
+
+def _truncate_from(ctx: Ctx, conv_id: str, message_id: str) -> None:
+    """Deletes a message and everything after it (and stops jobs still writing into the conversation)."""
+    row = ctx.p.db.one("SELECT created_at FROM messages WHERE id=? AND conversation_id=? AND user_id=?",
+                       (message_id, conv_id, ctx.uid))
+    if not row:
+        raise ApiError(404, "not_found", "メッセージが見つかりません")
+    for j in list(ctx.p.jobs.jobs.values()):
+        if j.conversation_id == conv_id and j.user_id == ctx.uid:
+            ctx.p.jobs.cancel(j.id, ctx.uid)
+    ctx.p.db.execute("DELETE FROM messages WHERE conversation_id=? AND created_at>=?", (conv_id, row["created_at"]))
 
 
 def _conv(ctx: Ctx, conv_id: str) -> dict:
@@ -93,6 +110,8 @@ async def post_message(conv_id: str, body: MessageBody, ctx: User):
                      (conv_id, ctx.uid, title_from(body.content), ts, ts))
     else:
         _conv(ctx, conv_id)
+        if body.replace_from:
+            _truncate_from(ctx, conv_id, body.replace_from)
     mid = new_id()
     meta = {"attachments": [{"id": f["id"], "name": f["name"], "mime": f["mime"]}
                             for f in (p.files.get(ctx.uid, x) for x in body.attachments) if f], "mode": body.mode}
@@ -103,3 +122,27 @@ async def post_message(conv_id: str, body: MessageBody, ctx: User):
     p.db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (ts, conv_id))
     p.jobs.start(job, lambda j: run_chat(p, j))
     return {"conversation_id": conv_id, "user_message_id": mid, "job": job.public()}
+
+
+@router.post("/{conv_id}/regenerate")
+async def regenerate(conv_id: str, body: RegenBody, ctx: User):
+    """Re-answers the last user message: removes the replies after it and runs it again."""
+    p = ctx.p
+    _conv(ctx, conv_id)
+    last = p.db.one("SELECT id, content, meta, created_at FROM messages WHERE conversation_id=? AND role='user'"
+                    " ORDER BY created_at DESC LIMIT 1", (conv_id,))
+    if not last:
+        raise ApiError(400, "nothing_to_regenerate", "再生成するメッセージがありません")
+    meta = loads(last["meta"], {})
+    attachments = [a["id"] for a in meta.get("attachments", []) if p.files.get(ctx.uid, a["id"])]
+    job = p.jobs.create(ctx.user, "chat", {"content": last["content"], "attachments": attachments, "mode": body.mode,
+                                           "user_message_id": last["id"]}, conversation_id=conv_id)
+    for j in list(p.jobs.jobs.values()):
+        if j.conversation_id == conv_id and j.user_id == ctx.uid and j.id != job.id:
+            p.jobs.cancel(j.id, ctx.uid)
+    p.db.execute("DELETE FROM messages WHERE conversation_id=? AND created_at>? AND role!='user'",
+                 (conv_id, last["created_at"]))
+    p.db.execute("UPDATE messages SET job_id=? WHERE id=?", (job.id, last["id"]))
+    p.db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now(), conv_id))
+    p.jobs.start(job, lambda j: run_chat(p, j))
+    return {"conversation_id": conv_id, "user_message_id": last["id"], "job": job.public()}

@@ -19,6 +19,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "cert_file": "",
         "key_file": "",
         "public_url": "",
+        "tunnel_port": 8444,
         "cookie_secure": True,
         "allow_remote_admin": False,
         "trusted_proxies": [],

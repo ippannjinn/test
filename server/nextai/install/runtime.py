@@ -32,7 +32,23 @@ def _ver(s: str) -> tuple[int, ...]:
 
 
 def driver_cuda_version() -> str | None:
+    """Highest CUDA version the installed NVIDIA driver supports (e.g. "13.4"), or None."""
+    try:  # NVML first: works for services / installers whose PATH lacks nvidia-smi
+        import pynvml  # type: ignore
+
+        pynvml.nvmlInit()
+        try:
+            v = int(pynvml.nvmlSystemGetCudaDriverVersion_v2())
+        finally:
+            pynvml.nvmlShutdown()
+        if v > 0:
+            return f"{v // 1000}.{(v % 1000) // 10}"
+    except Exception:  # noqa: BLE001 - no NVIDIA driver / NVML
+        pass
     exe = shutil.which("nvidia-smi")
+    if not exe and IS_WIN:
+        cand = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "nvidia-smi.exe"
+        exe = str(cand) if cand.exists() else None
     if not exe:
         return None
     try:
@@ -164,8 +180,13 @@ class RuntimeInstaller:
         ok, devices = self.self_test_llama(exe)
         entry["devices"] = devices
         if accel.startswith("cuda") and not ok and prefer == "auto":
-            self.emit({"event": "notice", "message": "CUDAビルドでGPUを検出できないため Vulkan ビルドに切り替えます"})
-            return self.install_llama("vulkan")
+            self.emit({"event": "notice", "message": "CUDAビルドでGPUを検出できないため Vulkan ビルドに切り替えます: "
+                                                     + devices[-200:]})
+            fallback = self.install_llama("vulkan")
+            # remembered so later runs don't retry CUDA for this release (see needs_upgrade)
+            fallback["cuda_failed"] = {"version": rel["tag_name"], "cuda": cuda, "output": devices[-500:]}
+            self._save()
+            return fallback
         self.manifest["llama.cpp"] = entry
         self._save()
         return entry
@@ -256,8 +277,23 @@ class RuntimeInstaller:
         rel = entry.get("exe") or entry.get("path") or entry.get("python")
         return bool(rel) and (self.rt / rel).exists()
 
+    def needs_upgrade(self, component: str) -> bool:
+        """An NVIDIA GPU with a CUDA-capable driver but a Vulkan/CPU build installed (e.g. installed before the
+        driver, or by an older setup): fetch the CUDA build unless CUDA already failed for that release."""
+        if component not in ("llama.cpp", "sd.cpp"):
+            return False
+        entry = self.manifest.get(component) or {}
+        accel = str(entry.get("accel", ""))
+        if not accel or accel.startswith("cuda") or entry.get("cuda_failed"):
+            return False
+        return driver_cuda_version() is not None
+
     def install(self, components: list[str], force: bool = False) -> dict:
-        pending = [c for c in components if force or not self.installed(c)]
+        pending = [c for c in components if force or not self.installed(c) or self.needs_upgrade(c)]
+        for c in pending:
+            if self.installed(c) and not force:
+                self.emit({"event": "notice", "message": f"{c}: NVIDIA GPU 向けの CUDA 版に切り替えます"
+                                                         f" (現在: {self.manifest[c].get('accel')})"})
         for c in components:
             if c not in pending:
                 self.emit({"event": "component_skip", "component": c, "version": self.manifest[c].get("version", "")})

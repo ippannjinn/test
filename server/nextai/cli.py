@@ -54,6 +54,17 @@ def _read_password(args) -> str:
 
 
 # ------------------------------------------------------------------ commands
+def _port_free(host: str, port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
 def cmd_serve(args) -> int:
     import uvicorn
 
@@ -83,11 +94,35 @@ def cmd_serve(args) -> int:
     config = uvicorn.Config(app, host=host, port=port, log_config=None, proxy_headers=False, server_header=False,
                             timeout_keep_alive=30, limit_concurrency=1000, loop="asyncio", **ssl)
     server = uvicorn.Server(config)
-    platform.shutdown_cb = lambda: setattr(server, "should_exit", True)
+    servers = [server]
+    # Loopback-only plain-HTTP listener for Tailscale Funnel / tunnels (TLS is terminated by the tunnel).
+    # Requests on it are always treated as remote (see SecurityMiddleware / auth.deps.via_tunnel).
+    if srv.tunnel_port and srv.tunnel_port != port and _port_free("127.0.0.1", srv.tunnel_port):
+        tconf = uvicorn.Config(app, host="127.0.0.1", port=srv.tunnel_port, log_config=None, proxy_headers=False,
+                               server_header=False, timeout_keep_alive=30, limit_concurrency=1000, loop="asyncio",
+                               lifespan="off")
+        servers.append(uvicorn.Server(tconf))
+
+    def _stop() -> None:
+        for x in servers:
+            x.should_exit = True
+
+    platform.shutdown_cb = _stop
     if os.name == "nt":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     log.info("NextAI Platform %s listening on %s://%s:%d", __version__, "https" if ssl else "http", host, port)
-    asyncio.run(server.serve())
+    if len(servers) > 1:
+        log.info("tunnel listener on http://127.0.0.1:%d (for Tailscale Funnel)", srv.tunnel_port)
+    elif srv.tunnel_port:
+        log.warning("tunnel port %d is not available; external access via Tailscale Funnel is disabled", srv.tunnel_port)
+
+    async def _main() -> None:
+        extra = [asyncio.create_task(x.serve()) for x in servers[1:]]
+        await server.serve()
+        _stop()
+        await asyncio.gather(*extra, return_exceptions=True)
+
+    asyncio.run(_main())
     return platform.exit_code
 
 

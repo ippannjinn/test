@@ -112,9 +112,19 @@ def system_checks(settings: Settings) -> list[Check]:
     rt = settings.paths.runtime
     man = runtime_manifest(rt)
     llama = find_executable(rt, "llama.cpp", ["llama-server"])
-    out.append(Check("rt_llama", "推論ランタイム (llama.cpp)", PASS if llama else FAIL,
-                     f"{man.get('llama.cpp', {}).get('version', '')} {man.get('llama.cpp', {}).get('accel', '')}".strip() if llama else "未インストール",
-                     advice="" if llama else "インストーラーを再実行してください"))
+    lentry = man.get("llama.cpp", {})
+    status, advice = (PASS, "") if llama else (FAIL, "インストーラーを再実行してください")
+    if llama and not str(lentry.get("accel", "")).startswith("cuda"):
+        from .install.runtime import driver_cuda_version
+
+        if driver_cuda_version():
+            status = WARN
+            advice = ("NVIDIA GPU なのに CUDA 版ではありません (遅くなります)。"
+                      + ("CUDA 版は起動テストに失敗しました: " + str(lentry["cuda_failed"].get("output", ""))[-120:]
+                         if lentry.get("cuda_failed") else "アップデート (またはインストーラーの再実行) で CUDA 版に切り替わります"))
+    out.append(Check("rt_llama", "推論ランタイム (llama.cpp)", status,
+                     f"{lentry.get('version', '')} {lentry.get('accel', '')}".strip() if llama else "未インストール",
+                     advice=advice))
     sd = find_executable(rt, "sd.cpp", ["sd", "sd-cli"])
     out.append(Check("rt_sd", "画像/動画ランタイム (sd.cpp)", PASS if sd else WARN,
                      man.get("sd.cpp", {}).get("version", "") if sd else "未インストール"))

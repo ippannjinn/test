@@ -1,7 +1,7 @@
 import { renderMarkdown } from "./md.js";
 
 const S = { user: null, csrf: null, server: null, trusted: false, info: {}, view: "chat", convId: null, convs: [],
-  attach: [], mode: "auto", streams: new Map(), prefs: {} };
+  attach: [], mode: "auto", streams: new Map(), prefs: {}, activeJob: null, search: "" };
 const app = document.getElementById("app");
 
 // ---------------------------------------------------------------- helpers
@@ -22,9 +22,57 @@ function h(tag, attrs, ...kids) {
   }
   return el;
 }
+
+// Line icons (24x24, stroke) in the style of the major chat apps.
+const ICONS = {
+  plus: "M12 5v14M5 12h14",
+  send: "M12 19V5M5 12l7-7 7 7",
+  stop: "M7 7h10v10H7z",
+  menu: "M4 6h16M4 12h16M4 18h16",
+  panel: "M3 4h18v16H3zM9 4v16",
+  search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3",
+  edit: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
+  newchat: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
+  copy: "M9 9h11v11H9zM5 15H4V4h11v1",
+  check: "M20 6 9 17l-5-5",
+  refresh: "M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5",
+  more: "M5 12h.01M12 12h.01M19 12h.01",
+  trash: "M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6",
+  image: "M3 3h18v18H3zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21",
+  file: "M14 2H6v20h12V8zM14 2v6h6",
+  brain: "M12 5a3 3 0 0 0-5.9.8A3 3 0 0 0 4 11a3 3 0 0 0 2 5.2A3 3 0 0 0 12 18zM12 5a3 3 0 0 1 5.9.8A3 3 0 0 1 20 11a3 3 0 0 1-2 5.2A3 3 0 0 1 12 18z",
+  settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
+  logout: "M9 21H5V3h4M16 17l5-5-5-5M21 12H9",
+  sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4",
+  moon: "M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z",
+  down: "M12 5v14M5 12l7 7 7-7",
+  chevron: "M6 9l6 6 6-6",
+  spark: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z",
+  bolt: "M13 2 3 14h9l-1 8 10-12h-9z",
+  gem: "M6 3h12l4 6-10 12L2 9zM2 9h20M12 21 8 9l4-6 4 6z",
+  code: "M16 18l6-6-6-6M8 6l-6 6 6 6",
+  globe: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20",
+  music: "M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
+  pen: "M12 19l7-7 3 3-7 7zM18 13l-1.5-7.5L2 2l3.5 14.5L13 18zM2 2l7.6 7.6",
+  x: "M18 6 6 18M6 6l12 12",
+  paperclip: "M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5",
+};
+function icon(name, size = 18) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("width", size); svg.setAttribute("height", size);
+  svg.setAttribute("fill", "none"); svg.setAttribute("stroke", "currentColor"); svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round"); svg.setAttribute("stroke-linejoin", "round"); svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("ic");
+  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  p.setAttribute("d", ICONS[name] || ""); svg.append(p);
+  return svg;
+}
+const iconBtn = (name, label, onclick, cls = "") => h("button", { class: `icon-btn ${cls}`, title: label, "aria-label": label, type: "button", onclick }, icon(name));
+
 const fmtBytes = (n) => n < 1024 ? `${n}B` : n < 1048576 ? `${(n / 1024).toFixed(1)}KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)}MB` : `${(n / 1073741824).toFixed(2)}GB`;
 const fmtTime = (ts) => ts ? new Date(ts * 1000).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "-";
 const fmtSecs = (s) => s < 60 ? `${Math.round(s)}秒` : `${Math.floor(s / 60)}分${Math.round(s % 60)}秒`;
+const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } } };
 let toastTimer;
 function toast(msg) {
   document.querySelector(".toast")?.remove();
@@ -34,6 +82,31 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.remove(), 3500);
 }
 function confirmDanger(msg) { return window.confirm(msg); }
+async function copyText(text, btn) {
+  try { await navigator.clipboard.writeText(text); } catch { toast("コピーできませんでした"); return; }
+  if (btn) { const old = btn.innerHTML; btn.replaceChildren(icon("check")); btn.classList.add("done"); setTimeout(() => { btn.innerHTML = old; btn.classList.remove("done"); }, 1400); }
+  else toast("コピーしました");
+}
+
+// Popover menu (conversation "…", account menu, mode picker).
+function popover(anchor, items, { align = "left", up = false } = {}) {
+  closePopover();
+  const menu = h("div", { class: "popover", role: "menu" }, items.map((it) => it === "-" ? h("div", { class: "sep" }) :
+    h("button", { class: `pop-item ${it.danger ? "danger" : ""} ${it.active ? "active" : ""}`, role: "menuitem", type: "button",
+      onclick: (e) => { e.stopPropagation(); closePopover(); it.onclick(); } },
+    it.icon ? icon(it.icon, 16) : null, h("span", { class: "grow" }, h("div", {}, it.label), it.desc ? h("div", { class: "desc" }, it.desc) : null),
+    it.active ? icon("check", 16) : null)));
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  let left = align === "right" ? r.right - mw : r.left;
+  left = Math.max(8, Math.min(left, innerWidth - mw - 8));
+  let top = up ? r.top - mh - 6 : r.bottom + 6;
+  if (top + mh > innerHeight - 8) top = r.top - mh - 6;
+  menu.style.left = `${left}px`; menu.style.top = `${Math.max(8, top)}px`;
+  setTimeout(() => document.addEventListener("click", closePopover, { once: true }), 0);
+}
+function closePopover() { document.querySelectorAll(".popover").forEach((m) => m.remove()); }
 
 class ApiError extends Error {
   constructor(status, code, message) { super(message); this.status = status; this.code = code; }
@@ -72,12 +145,17 @@ async function tryRefresh() {
 function applySession(d) {
   S.user = d.user; S.csrf = d.csrf_token; S.server = d.server; S.trusted = d.trusted_device;
   S.prefs = Object.assign({ theme: "auto", enter_send: !matchMedia("(pointer: coarse)").matches }, d.user?.ui_prefs || {});
+  S.mode = store.get("nextai.mode", "auto");
   applyPrefs();
 }
 function applyPrefs() {
   const t = S.prefs.theme;
   if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
   else delete document.documentElement.dataset.theme;
+}
+async function setTheme(t) {
+  S.prefs.theme = t; applyPrefs();
+  try { const d = await api("/api/account/profile", { method: "PATCH", body: { ui_prefs: { ...S.prefs, theme: t } } }); S.user = d.user; } catch { /* keep local */ }
 }
 
 // ---------------------------------------------------------------- boot / auth screens
@@ -92,7 +170,13 @@ async function boot() {
 }
 
 function brand() {
-  return h("div", { class: "brand" }, h("img", { src: "icon.svg", alt: "" }), S.info.name || "NextAI");
+  return h("div", { class: "brand" }, h("img", { src: "icon.svg", alt: "" }), h("span", {}, S.info.name || "NextAI"));
+}
+
+function authScreen(...content) {
+  app.className = "";
+  app.replaceChildren(h("div", { class: "auth" }, h("div", { class: "auth-glow" }),
+    h("div", { class: "auth-card" }, h("div", { class: "auth-logo" }, h("img", { src: "icon.svg", alt: "" })), ...content)));
 }
 
 function showLogin() {
@@ -100,10 +184,10 @@ function showLogin() {
   S.streams.clear();
   S.user = null; S.csrf = null;
   const err = h("div", { class: "error" });
-  const user = h("input", { class: "input", autocomplete: "username", required: true, autocapitalize: "none" });
-  const pass = h("input", { class: "input", type: "password", autocomplete: "current-password", required: true });
+  const user = h("input", { class: "input", autocomplete: "username", required: true, autocapitalize: "none", placeholder: "ユーザー名" });
+  const pass = h("input", { class: "input", type: "password", autocomplete: "current-password", required: true, placeholder: "パスワード" });
   const trust = h("input", { type: "checkbox", checked: true });
-  const btn = h("button", { class: "btn primary", type: "submit" }, "ログイン");
+  const btn = h("button", { class: "btn primary block", type: "submit" }, "ログイン");
   const form = h("form", { onsubmit: async (e) => {
     e.preventDefault(); err.textContent = ""; btn.disabled = true;
     try {
@@ -115,12 +199,11 @@ function showLogin() {
     h("label", { class: "field" }, h("span", {}, "ユーザー名"), user),
     h("label", { class: "field" }, h("span", {}, "パスワード"), pass),
     h("label", { class: "check" }, trust, "この端末を信頼する (次回からログイン不要)"),
-    err, h("div", { class: "row" }, h("div", { class: "spacer" }), btn));
-  app.className = "";
-  app.replaceChildren(h("div", { class: "auth" }, h("div", { class: "card" }, brand(),
-    h("p", { class: "muted small" }, S.info.login_message || "管理者から受け取ったアカウントでログインしてください。"),
+    err, btn);
+  authScreen(h("h1", {}, `${S.info.name || "NextAI"} にログイン`),
+    h("p", { class: "muted" }, S.info.login_message || "管理者から受け取ったアカウントでログインしてください。"),
     form,
-    h("p", { class: "muted small" }, "証明書の警告が出る場合は ", h("a", { href: "/ca.crt" }, "CA証明書"), " を端末にインストールしてください。"))));
+    location.hostname.endsWith(".ts.net") ? null : h("p", { class: "muted small center" }, "証明書の警告が出る場合は ", h("a", { href: "/ca.crt" }, "CA証明書"), " を端末にインストールしてください。"));
   user.focus();
 }
 
@@ -148,12 +231,10 @@ function passwordForm(forced, done) {
 }
 
 function showPasswordChange(forced) {
-  app.className = "";
-  app.replaceChildren(h("div", { class: "auth" }, h("div", { class: "card" }, brand(),
-    h("h2", {}, "パスワードの変更"),
-    h("p", { class: "muted small" }, forced ? "初回ログインのため、新しいパスワードを設定してください。" : ""),
+  authScreen(h("h1", {}, "パスワードの変更"),
+    h("p", { class: "muted" }, forced ? "初回ログインのため、新しいパスワードを設定してください。" : ""),
     passwordForm(forced, () => { toast("パスワードを変更しました"); showApp(); }),
-    h("button", { class: "btn ghost small", onclick: logout }, "ログアウト"))));
+    h("button", { class: "btn ghost small", onclick: logout }, "ログアウト"));
 }
 
 async function logout(forget = false) {
@@ -163,26 +244,60 @@ async function logout(forget = false) {
 
 // ---------------------------------------------------------------- app shell
 let shell;
+const NAV = [["chat", "チャット", "newchat"], ["create", "画像・動画・音楽", "image"], ["files", "ファイル", "file"], ["memory", "メモリ", "brain"], ["settings", "設定", "settings"]];
+
 function showApp() {
   app.className = "";
   const nav = h("nav", { class: "nav" });
   const convs = h("div", { class: "convs" });
   const main = h("div", { class: "view" });
-  const title = h("div", { class: "grow title" }, "");
-  const layout = h("div", { class: "layout" },
+  const title = h("div", { class: "hdr-title" });
+  const headerRight = h("div", { class: "hdr-right" });
+  const search = h("input", { class: "search-input", type: "search", placeholder: "チャットを検索", "aria-label": "チャットを検索",
+    oninput: () => { S.search = search.value.trim(); renderConvs(); } });
+  const layout = h("div", { class: "layout" + (store.get("nextai.sidebar", true) ? "" : " collapsed") });
+  const toggle = () => {
+    if (matchMedia("(max-width: 860px)").matches) layout.classList.toggle("open");
+    else { layout.classList.toggle("collapsed"); store.set("nextai.sidebar", !layout.classList.contains("collapsed")); }
+  };
+  const meBtn = h("button", { class: "me", type: "button", onclick: (e) => { e.stopPropagation(); accountMenu(meBtn); } },
+    avatarEl(), h("div", { class: "grow" }, h("div", { class: "name" }, S.user.display_name), h("div", { class: "muted small" }, S.user.role === "admin" ? "管理者" : "メンバー")),
+    icon("more"));
+  layout.append(
     h("aside", { class: "sidebar" },
-      h("div", { class: "top" }, brand(), h("button", { class: "btn primary", onclick: () => { go("chat"); newChat(); } }, "＋ 新しいチャット")),
-      nav, convs,
-      h("div", { class: "me", onclick: () => go("settings") }, avatarEl(), h("div", { class: "grow" }, h("div", {}, S.user.display_name), h("div", { class: "muted small" }, S.user.username)))),
+      h("div", { class: "side-top" }, brand(), iconBtn("panel", "サイドバーを閉じる", toggle)),
+      h("button", { class: "new-chat", type: "button", onclick: () => { go("chat"); newChat(); } }, icon("newchat"), h("span", {}, "新しいチャット"), h("kbd", {}, "Ctrl ⇧ O")),
+      h("div", { class: "search" }, icon("search", 16), search),
+      nav,
+      h("div", { class: "side-label" }, "チャット履歴"),
+      convs,
+      meBtn),
     h("div", { class: "overlay", onclick: () => layout.classList.remove("open") }),
     h("main", { class: "main" },
-      h("div", { class: "topbar" }, h("button", { class: "btn ghost", "aria-label": "menu", onclick: () => layout.classList.add("open") }, "☰"), title,
-        h("button", { class: "btn ghost", onclick: () => { go("chat"); newChat(); } }, "＋")),
+      h("header", { class: "hdr" }, iconBtn("panel", "サイドバー", toggle, "hdr-toggle"), title, headerRight),
       main));
-  shell = { layout, nav, convs, main, title };
+  shell = { layout, nav, convs, main, title, headerRight, search };
   app.replaceChildren(layout);
   window.onhashchange = route;
+  document.onkeydown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "O" || e.key === "o")) { e.preventDefault(); go("chat"); newChat(); }
+    else if ((e.ctrlKey || e.metaKey) && e.key === "k") { e.preventDefault(); if (layout.classList.contains("collapsed")) toggle(); search.focus(); }
+    else if (e.key === "Escape" && S.activeJob && S.view === "chat") stopGeneration();
+  };
   route();
+}
+
+function accountMenu(anchor) {
+  const t = S.prefs.theme || "auto";
+  popover(anchor, [
+    { icon: "settings", label: "設定", onclick: () => go("settings") },
+    "-",
+    { icon: "sun", label: "ライト", active: t === "light", onclick: () => setTheme("light") },
+    { icon: "moon", label: "ダーク", active: t === "dark", onclick: () => setTheme("dark") },
+    { icon: "spark", label: "端末に合わせる", active: t === "auto", onclick: () => setTheme("auto") },
+    "-",
+    { icon: "logout", label: "ログアウト", onclick: () => logout(false) },
+  ], { up: true });
 }
 
 function avatarEl() {
@@ -190,17 +305,20 @@ function avatarEl() {
   return h("div", { class: "avatar" }, (S.user.display_name || "?").slice(0, 1));
 }
 
-const NAV = [["chat", "チャット"], ["create", "画像・動画・音楽"], ["files", "ファイル"], ["memory", "メモリ"], ["settings", "設定"]];
 function renderNav() {
-  shell.nav.replaceChildren(...NAV.map(([id, label]) => h("button", { class: S.view === id ? "active" : "", onclick: () => go(id) }, label)));
+  shell.nav.replaceChildren(...NAV.filter(([id]) => id !== "chat" && id !== "settings").map(([id, label, ic]) =>
+    h("button", { class: "nav-item" + (S.view === id ? " active" : ""), type: "button", onclick: () => go(id) }, icon(ic), h("span", {}, label))));
 }
 function go(view, id) { location.hash = id ? `#${view}/${id}` : `#${view}`; }
 function route() {
   const [view, id] = location.hash.replace(/^#/, "").split("/");
   S.view = NAV.some(([v]) => v === view) ? view : "chat";
   shell.layout.classList.remove("open");
+  closePopover();
   renderNav();
-  shell.title.textContent = NAV.find(([v]) => v === S.view)[1];
+  shell.title.textContent = "";
+  shell.title.onclick = null;
+  shell.headerRight.replaceChildren();
   loadConvs();
   if (S.view === "chat") openChat(id || null);
   else if (S.view === "create") viewCreate();
@@ -210,117 +328,231 @@ function route() {
 }
 
 async function loadConvs() {
-  try { S.convs = (await api("/api/conversations")).conversations; } catch { return; }
-  shell.convs.replaceChildren(
-    ...(S.convs.length ? S.convs.map((c) => h("div", { class: "conv" + (c.id === S.convId && S.view === "chat" ? " active" : ""), onclick: () => go("chat", c.id) },
-      h("span", { class: "t", title: c.title }, c.title),
-      h("button", { class: "x", title: "削除", onclick: async (e) => {
+  try { S.convs = (await api("/api/conversations?limit=300")).conversations; } catch { return; }
+  renderConvs();
+}
+
+function convGroups(list) {
+  const now = new Date(); const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+  const groups = [["今日", day0], ["昨日", day0 - 86400], ["過去7日間", day0 - 7 * 86400], ["過去30日間", day0 - 30 * 86400], ["それ以前", -Infinity]];
+  const out = groups.map(([label]) => [label, []]);
+  for (const c of list) out[groups.findIndex(([, from]) => c.updated_at >= from)][1].push(c);
+  return out.filter(([, items]) => items.length);
+}
+
+function renderConvs() {
+  const q = S.search.toLowerCase();
+  const list = q ? S.convs.filter((c) => c.title.toLowerCase().includes(q)) : S.convs;
+  if (!list.length) { shell.convs.replaceChildren(h("div", { class: "muted small pad" }, q ? "見つかりません" : "会話はまだありません")); return; }
+  shell.convs.replaceChildren(...convGroups(list).map(([label, items]) => h("div", { class: "conv-group" }, h("div", { class: "group-label" }, label),
+    items.map((c) => {
+      const more = iconBtn("more", "メニュー", (e) => {
         e.stopPropagation();
-        if (!confirmDanger(`「${c.title}」を削除しますか？`)) return;
-        await api(`/api/conversations/${c.id}`, { method: "DELETE" });
-        if (S.convId === c.id) go("chat"); else loadConvs();
-      } }, "×"))) : [h("div", { class: "muted small" }, "会話はまだありません")]));
+        popover(more, [
+          { icon: "edit", label: "名前を変更", onclick: () => renameConv(c) },
+          { icon: "trash", label: "削除", danger: true, onclick: () => deleteConv(c) },
+        ], { align: "right" });
+      }, "conv-more");
+      return h("div", { class: "conv" + (c.id === S.convId && S.view === "chat" ? " active" : ""), role: "button", tabindex: 0,
+        onclick: () => go("chat", c.id), onkeydown: (e) => { if (e.key === "Enter") go("chat", c.id); } },
+      h("span", { class: "t", title: c.title }, c.title), more);
+    }))));
+}
+
+async function renameConv(c) {
+  const t = prompt("チャットの名前", c.title);
+  if (!t || !t.trim()) return;
+  try { await api(`/api/conversations/${c.id}`, { method: "PATCH", body: { title: t.trim() } }); } catch (e) { toast(e.message); return; }
+  if (c.id === S.convId) shell.title.textContent = t.trim();
+  loadConvs();
+}
+async function deleteConv(c) {
+  if (!confirmDanger(`「${c.title}」を削除しますか？この操作は取り消せません。`)) return;
+  try { await api(`/api/conversations/${c.id}`, { method: "DELETE" }); } catch (e) { toast(e.message); return; }
+  if (S.convId === c.id) go("chat"); else loadConvs();
 }
 
 // ---------------------------------------------------------------- chat
 let chat;
+const MODES = [
+  ["auto", "自動", "内容と混雑状況から最適なモデルと推論の深さを選びます", "spark"],
+  ["fast", "速さ優先", "軽いモデルで素早く答えます", "bolt"],
+  ["quality", "品質優先", "混雑していても高性能な設定で待って答えます", "gem"],
+];
 function newChat() { S.convId = null; S.attach = []; if (S.view === "chat") openChat(null); }
+
+function modePill() {
+  const m = MODES.find(([k]) => k === S.mode) || MODES[0];
+  const b = h("button", { class: "pill", type: "button", title: "応答モード" }, icon(m[3], 16), h("span", {}, m[1]), icon("chevron", 14));
+  b.onclick = (e) => {
+    e.stopPropagation();
+    popover(b, MODES.map(([k, label, desc, ic]) => ({ icon: ic, label, desc, active: S.mode === k,
+      onclick: () => { S.mode = k; store.set("nextai.mode", k); b.replaceWith(modePill()); } })), { up: true });
+  };
+  return b;
+}
 
 async function openChat(convId) {
   S.convId = convId;
-  const inner = h("div", { class: "inner" });
+  S.activeJob = null;
+  const inner = h("div", { class: "thread" });
   const messages = h("div", { class: "messages" }, inner);
-  const ta = h("textarea", { rows: 1, placeholder: "メッセージを入力", "aria-label": "message" });
+  const ta = h("textarea", { rows: 1, placeholder: `${S.info.name || "NextAI"} にメッセージを送信`, "aria-label": "メッセージ" });
   const attached = h("div", { class: "attached" });
-  const fileIn = h("input", { type: "file", multiple: true, hidden: true, onchange: () => uploadAttachments(fileIn.files) });
-  const mode = h("select", { "aria-label": "mode", onchange: () => { S.mode = mode.value; } },
-    h("option", { value: "auto" }, "自動"), h("option", { value: "fast" }, "速さ優先"), h("option", { value: "quality" }, "品質優先 (待ってでも高品質)"));
-  mode.value = S.mode;
-  const sendBtn = h("button", { class: "btn primary", onclick: () => send() }, "送信");
-  ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(220, ta.scrollHeight) + "px"; });
+  const fileIn = h("input", { type: "file", multiple: true, hidden: true, onchange: () => { uploadAttachments(fileIn.files); fileIn.value = ""; } });
+  const sendBtn = h("button", { class: "send", type: "button", title: "送信 (Enter)", "aria-label": "送信", onclick: () => (S.activeJob ? stopGeneration() : send()) }, icon("send", 18));
+  const autosize = () => { ta.style.height = "auto"; ta.style.height = Math.min(240, ta.scrollHeight) + "px"; updateSend(); };
+  ta.addEventListener("input", autosize);
   ta.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && S.prefs.enter_send) { e.preventDefault(); send(); }
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && S.prefs.enter_send) { e.preventDefault(); if (!S.activeJob) send(); }
   });
-  const status = h("span", { class: "muted small" });
-  const composer = h("div", { class: "composer" }, h("div", { class: "inner" }, attached,
-    h("div", { class: "box" }, h("button", { class: "btn ghost", title: "ファイルを添付", onclick: () => fileIn.click() }, "📎"), ta, sendBtn),
-    h("div", { class: "tools" }, mode, status, h("div", { class: "spacer" }), h("span", { class: "muted small" }, S.prefs.enter_send ? "Enterで送信 / Shift+Enterで改行" : "")),
-    fileIn));
-  chat = { inner, messages, ta, attached, sendBtn, status };
-  shell.main.replaceChildren(h("div", { class: "chat" }, messages, composer));
+  ta.addEventListener("paste", (e) => { const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); uploadAttachments(files); } });
+  const status = h("span", { class: "composer-status" });
+  const composer = h("div", { class: "composer" },
+    h("div", { class: "composer-box" }, attached, ta,
+      h("div", { class: "composer-row" },
+        h("button", { class: "icon-btn", type: "button", title: "ファイルを添付", "aria-label": "ファイルを添付", onclick: () => fileIn.click() }, icon("plus")),
+        modePill(), status, h("div", { class: "spacer" }), sendBtn)),
+    fileIn,
+    h("div", { class: "disclaimer" }, "AI の回答は間違っていることがあります。重要な情報は確認してください。"));
+  const toBottom = h("button", { class: "to-bottom", type: "button", "aria-label": "最新のメッセージへ", onclick: () => scrollDown(true, true) }, icon("down"));
+  const drop = h("div", { class: "dropzone" }, icon("paperclip", 28), h("div", {}, "ここにドロップして添付"));
+  const below = h("div", { class: "below" });
+  const wrap = h("div", { class: "chat" }, messages, toBottom, h("div", { class: "composer-wrap" }, composer), below, drop);
+  let dragDepth = 0;
+  wrap.addEventListener("dragenter", (e) => { if ([...e.dataTransfer.types].includes("Files")) { dragDepth++; wrap.classList.add("dragging"); } });
+  wrap.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; wrap.classList.remove("dragging"); } });
+  wrap.addEventListener("dragover", (e) => e.preventDefault());
+  wrap.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; wrap.classList.remove("dragging"); if (e.dataTransfer.files.length) uploadAttachments(e.dataTransfer.files); });
+  messages.addEventListener("scroll", () => toBottom.classList.toggle("show", messages.scrollHeight - messages.scrollTop - messages.clientHeight > 240));
+  chat = { inner, messages, ta, attached, sendBtn, status, wrap, autosize, below };
+  shell.main.replaceChildren(wrap);
+  shell.headerRight.replaceChildren(iconBtn("newchat", "新しいチャット (Ctrl+Shift+O)", () => { go("chat"); newChat(); }));
   renderAttached();
   refreshStatus();
-  if (!convId) { renderEmpty(); ta.focus(); return; }
+  if (!convId) { wrap.classList.add("welcome"); renderEmpty(); ta.focus(); return; }
   try {
     const d = await api(`/api/conversations/${convId}`);
     shell.title.textContent = d.conversation.title;
-    inner.replaceChildren(...d.messages.map(renderMessage));
+    shell.title.onclick = () => renameConv(d.conversation);
+    inner.replaceChildren(...d.messages.map((m, i) => renderMessage(m, i === d.messages.length - 1)));
     for (const j of d.active_jobs) attachLive(j.id);
     scrollDown(true);
   } catch (e) { inner.replaceChildren(h("div", { class: "empty" }, e.message)); }
+  if (!matchMedia("(pointer: coarse)").matches) ta.focus();
+}
+
+function updateSend() {
+  if (!chat) return;
+  const busy = !!S.activeJob;
+  chat.sendBtn.replaceChildren(icon(busy ? "stop" : "send", 18));
+  chat.sendBtn.title = busy ? "生成を停止 (Esc)" : "送信 (Enter)";
+  chat.sendBtn.classList.toggle("busy", busy);
+  chat.sendBtn.disabled = !busy && !chat.ta.value.trim();
+}
+
+async function stopGeneration() {
+  const id = S.activeJob;
+  if (!id) return;
+  try { await api(`/api/jobs/${id}/cancel`, { method: "POST" }); } catch (e) { toast(e.message); }
 }
 
 async function refreshStatus() {
   try {
     const s = await api("/api/status");
     const q = s.queue;
-    chat.status.textContent = q.pending ? `混雑状況: 待機 ${q.pending}件 (目安 ${fmtSecs(q.est_wait_seconds)})` : (s.load_level !== "NORMAL" ? `サーバー負荷: ${s.load_level}` : "");
+    chat.status.textContent = q.pending ? `混雑中: 待機 ${q.pending}件 (約${fmtSecs(q.est_wait_seconds)})` : (s.load_level !== "NORMAL" ? `サーバー負荷: ${s.load_level}` : "");
   } catch { /* ignore */ }
 }
 
 function renderEmpty() {
-  const ideas = ["週末の旅行プランを考えて", "Pythonで CSV を集計するスクリプトを書いて実行して", "最新のAIニュースを調べて要約して",
-    "夕焼けの海辺のイラストを生成して", "この文章を英語に翻訳して: ", "落ち着いたピアノのBGMを作曲して"];
-  chat.inner.replaceChildren(h("div", { class: "empty" }, h("h1", {}, `こんにちは、${S.user.display_name}さん`),
-    h("div", {}, "普通に話しかけるだけで、AIが最適なモデル・ツール・推論の深さを自動で選びます。"),
-    h("div", { class: "suggest" }, ideas.map((t) => h("button", { onclick: () => { chat.ta.value = t; chat.ta.focus(); } }, t)))));
+  const ideas = [
+    ["pen", "文章", "丁寧なお礼のメールを書いて"],
+    ["code", "コード", "Pythonで CSV を集計するスクリプトを書いて実行して"],
+    ["globe", "調べもの", "最新のAIニュースを調べて要約して"],
+    ["image", "画像", "夕焼けの海辺のイラストを生成して"],
+    ["music", "音楽", "落ち着いたピアノのBGMを作曲して"],
+    ["brain", "相談", "週末の旅行プランを一緒に考えて"],
+  ];
+  const hour = new Date().getHours();
+  const greet = hour < 5 ? "こんばんは" : hour < 11 ? "おはようございます" : hour < 18 ? "こんにちは" : "こんばんは";
+  chat.inner.replaceChildren(h("div", { class: "empty" },
+    h("h1", { class: "greet" }, `${greet}、`, h("span", { class: "nb" }, `${S.user.display_name}さん`)),
+    h("p", { class: "muted" }, "今日は何をお手伝いしましょうか？")));
+  chat.below.replaceChildren(h("div", { class: "suggest" }, ideas.map(([ic, label, t]) => h("button", { type: "button", onclick: () => { chat.ta.value = t; chat.autosize(); chat.ta.focus(); } },
+    h("span", { class: "s-ic" }, icon(ic)), h("span", { class: "s-label" }, label), h("span", { class: "s-text" }, t)))));
 }
 
-function scrollDown(force) {
+function scrollDown(force, smooth) {
   const m = chat?.messages;
   if (!m) return;
-  if (force || m.scrollHeight - m.scrollTop - m.clientHeight < 160) m.scrollTop = m.scrollHeight;
+  if (force || m.scrollHeight - m.scrollTop - m.clientHeight < 160) m.scrollTo({ top: m.scrollHeight, behavior: smooth ? "smooth" : "auto" });
 }
 
 function assetEl(a) {
   const url = `/api/files/${a.id}/content`;
-  if (a.mime?.startsWith("image/")) return h("a", { href: url, target: "_blank", rel: "noopener" }, h("img", { src: url, alt: a.name, loading: "lazy" }));
+  if (a.mime?.startsWith("image/")) return h("a", { class: "asset-img", href: url, target: "_blank", rel: "noopener" }, h("img", { src: url, alt: a.name, loading: "lazy" }));
   if (a.mime?.startsWith("audio/")) return h("audio", { controls: true, src: url, preload: "none" });
   if (a.mime?.startsWith("video/")) return h("video", { controls: true, src: url, preload: "none", class: "vid" });
-  return h("a", { class: "file-link", href: `${url}?download=1` }, "⬇ ", a.name);
+  return h("a", { class: "file-link", href: `${url}?download=1` }, icon("file", 16), a.name);
 }
 
-function metaChips(meta) {
+function metaInfo(meta) {
   const p = meta?.profile || {};
-  const chips = [];
-  if (p.label) chips.push(h("span", { class: "chip accent", title: (p.reasons || []).join("\n") }, p.label));
-  if (meta?.model_name) chips.push(h("span", { class: "chip" }, meta.model_name));
-  for (const t of meta?.tools || []) chips.push(h("span", { class: "chip" }, "🔧 " + t));
-  if (meta?.duration) chips.push(h("span", { class: "chip" }, `${meta.duration}s`));
-  return chips.length ? h("div", { class: "meta" }, chips) : null;
+  const parts = [p.label, meta?.model_name, ...(meta?.tools || []).map((t) => `🔧 ${t}`), meta?.duration ? `${meta.duration}s` : null].filter(Boolean);
+  if (!parts.length) return null;
+  return h("span", { class: "meta-info", title: (p.reasons || []).join("\n") }, parts.join(" · "));
 }
 
 function mdEl(text) {
   const el = h("div", { class: "md", html: renderMarkdown(text) });
-  el.querySelectorAll("button.copy").forEach((b) => b.addEventListener("click", () => {
-    navigator.clipboard?.writeText(b.closest(".code").querySelector("code").textContent).then(() => toast("コピーしました"));
-  }));
+  el.querySelectorAll("button.copy").forEach((b) => b.addEventListener("click", () => copyText(b.closest(".code").querySelector("code").textContent, b)));
   return el;
 }
 
-function renderMessage(m) {
+function actionBar(...btns) { return h("div", { class: "msg-actions" }, ...btns); }
+
+function renderMessage(m, isLast = false) {
   if (m.role === "user") {
-    const atts = (m.meta?.attachments || []).map((a) => h("span", { class: "chip" }, "📎 " + a.name));
-    return h("div", { class: "msg user" }, h("div", { class: "bubble" }, m.content, atts.length ? h("div", { class: "meta" }, atts) : null));
+    const atts = (m.meta?.attachments || []).map((a) => h("span", { class: "att-chip" }, icon(a.mime?.startsWith("image/") ? "image" : "file", 14), a.name));
+    const copyB = iconBtn("copy", "コピー", () => copyText(m.content, copyB));
+    const edit = m.id ? iconBtn("edit", "編集して再送信", () => editMessage(m)) : null;
+    return h("div", { class: "msg user", "data-id": m.id || "" },
+      atts.length ? h("div", { class: "atts" }, atts) : null,
+      h("div", { class: "bubble" }, m.content),
+      actionBar(copyB, edit));
   }
   const assets = (m.meta?.assets || []).map(assetEl);
-  return h("div", { class: "msg assistant" }, h("div", { class: "bubble" }, mdEl(m.content),
-    assets.length ? h("div", { class: "assets" }, assets) : null, metaChips(m.meta)));
+  const copyB = iconBtn("copy", "コピー", () => copyText(m.content, copyB));
+  const regen = isLast ? iconBtn("refresh", "再生成", () => regenerate()) : null;
+  return h("div", { class: "msg assistant" }, h("div", { class: "ai-avatar" }, h("img", { src: "icon.svg", alt: "" })),
+    h("div", { class: "body" }, mdEl(m.content), assets.length ? h("div", { class: "assets" }, assets) : null,
+      actionBar(copyB, regen, metaInfo(m.meta))));
+}
+
+function editMessage(m) {
+  chat.ta.value = m.content; chat.autosize(); chat.ta.focus();
+  chat.editFrom = m.id;
+  chat.status.textContent = "メッセージを編集中 (送信すると以降の会話は置き換わります)";
+}
+
+async function regenerate() {
+  if (!S.convId || S.activeJob) return;
+  try {
+    const d = await api(`/api/conversations/${S.convId}/regenerate`, { method: "POST", body: { mode: S.mode } });
+    const msgs = [...chat.inner.children];
+    const lastUser = msgs.map((x) => x.classList.contains("user")).lastIndexOf(true);
+    msgs.slice(lastUser + 1).forEach((x) => x.remove());
+    attachLive(d.job.id);
+    scrollDown(true);
+  } catch (e) { toast(e.message); }
 }
 
 function renderAttached() {
-  chat.attached.replaceChildren(...S.attach.map((f) => h("span", { class: "chip" }, "📎 " + f.name,
-    h("button", { class: "btn ghost small", onclick: () => { S.attach = S.attach.filter((x) => x.id !== f.id); renderAttached(); } }, "×"))));
+  chat.attached.replaceChildren(...S.attach.map((f) => h("span", { class: "att-chip" },
+    f.mime?.startsWith("image/") ? h("img", { src: `/api/files/${f.id}/content`, alt: "" }) : icon("file", 14), h("span", { class: "n" }, f.name),
+    h("button", { class: "x", type: "button", "aria-label": "削除", onclick: () => { S.attach = S.attach.filter((x) => x.id !== f.id); renderAttached(); } }, icon("x", 14)))));
+  chat.attached.hidden = !S.attach.length;
 }
 
 async function uploadAttachments(files) {
@@ -337,59 +569,70 @@ async function uploadAttachments(files) {
 
 async function send() {
   const text = chat.ta.value.trim();
-  if (!text) return;
+  if (!text || S.activeJob) return;
   chat.sendBtn.disabled = true;
+  const replaceFrom = chat.editFrom;
   try {
-    const d = await api(`/api/conversations/${S.convId || "new"}/messages`, { method: "POST", body: { content: text, attachments: S.attach.map((a) => a.id), mode: S.mode } });
+    const d = await api(`/api/conversations/${S.convId || "new"}/messages`, { method: "POST",
+      body: { content: text, attachments: S.attach.map((a) => a.id), mode: S.mode, replace_from: replaceFrom || null } });
     const isNew = !S.convId;
-    if (!S.convId || chat.inner.querySelector(".empty")) chat.inner.replaceChildren();
-    chat.inner.append(renderMessage({ role: "user", content: text, meta: { attachments: S.attach } }));
-    chat.ta.value = ""; chat.ta.style.height = "auto";
+    chat.wrap.classList.remove("welcome");
+    chat.below.replaceChildren();
+    if (isNew || chat.inner.querySelector(".empty")) chat.inner.replaceChildren();
+    if (replaceFrom) {
+      const kids = [...chat.inner.children];
+      const at = kids.findIndex((x) => x.dataset.id === replaceFrom);
+      if (at >= 0) kids.slice(at).forEach((x) => x.remove());
+      chat.editFrom = null;
+    }
+    chat.inner.querySelectorAll(".msg-actions .icon-btn[title='再生成']").forEach((b) => b.remove());
+    chat.inner.append(renderMessage({ id: d.user_message_id, role: "user", content: text, meta: { attachments: S.attach } }));
+    chat.ta.value = ""; chat.autosize(); chat.status.textContent = "";
     S.attach = []; renderAttached();
     S.convId = d.conversation_id;
-    if (isNew) { history.replaceState(null, "", `#chat/${d.conversation_id}`); loadConvs(); }
+    if (isNew) { history.replaceState(null, "", `#chat/${d.conversation_id}`); shell.title.textContent = text.replace(/\s+/g, " ").slice(0, 40); loadConvs(); }
     attachLive(d.job.id);
     scrollDown(true);
   } catch (e) { toast(e.message); }
-  finally { chat.sendBtn.disabled = false; }
+  finally { updateSend(); }
 }
 
 const PHASE = { plan: "計画中", act: "実行中", verify: "検証中" };
 function attachLive(jobId) {
-  const statusLine = h("div", {}, "キューに登録しました…");
+  S.activeJob = jobId; updateSend();
+  const statusLine = h("span", { class: "shimmer" }, "考えています…");
   const prog = h("div", { class: "progress", hidden: true }, h("div"));
   const steps = h("div", { class: "steps" });
+  const stepsBox = h("details", { class: "activity", hidden: true }, h("summary", {}, icon("chevron", 14), h("span", {}, "実行ログ")), steps);
   const content = h("div", { class: "md typing" });
-  const chips = h("div", { class: "meta" });
   const assets = h("div", { class: "assets" });
-  const cancel = h("button", { class: "btn small", onclick: async () => { try { await api(`/api/jobs/${jobId}/cancel`, { method: "POST" }); } catch (e) { toast(e.message); } } }, "停止");
-  const live = h("div", { class: "live" }, h("div", { class: "row" }, statusLine, h("div", { class: "spacer" }), cancel), prog, steps);
-  const el = h("div", { class: "msg assistant", "data-job": jobId }, h("div", { class: "bubble" }, live, content, assets, chips));
+  const info = h("span", { class: "meta-info" });
+  const el = h("div", { class: "msg assistant live", "data-job": jobId }, h("div", { class: "ai-avatar spin" }, h("img", { src: "icon.svg", alt: "" })),
+    h("div", { class: "body" }, h("div", { class: "live-status" }, statusLine), prog, stepsBox, content, assets, actionBar(info)));
   chat.inner.append(el);
-  let text = "", pending = false;
+  let text = "", pending = false, nsteps = 0;
   const paint = () => {
     if (pending) return; pending = true;
-    requestAnimationFrame(() => { pending = false; content.innerHTML = renderMarkdown(text); scrollDown(); });
+    requestAnimationFrame(() => { pending = false; content.innerHTML = renderMarkdown(text); if (text) statusLine.parentElement.hidden = true; scrollDown(); });
   };
-  const addStep = (s) => { steps.append(h("div", { class: "step" }, s)); steps.scrollTop = steps.scrollHeight; };
+  const addStep = (s) => { nsteps++; stepsBox.hidden = false; stepsBox.querySelector("summary span").textContent = `実行ログ (${nsteps})`; steps.append(h("div", { class: "step" }, s)); };
   const es = new EventSource(`/api/jobs/${jobId}/events`);
   S.streams.set(jobId, es);
   const on = (type, fn) => es.addEventListener(type, (ev) => { try { fn(JSON.parse(ev.data)); } catch (e) { console.error(e); } });
   on("profile", (p) => {
-    chips.replaceChildren(h("span", { class: "chip accent", title: (p.reasons || []).join("\n") }, p.label),
-      p.model_name ? h("span", { class: "chip" }, p.model_name) : null,
-      ...(p.tools || []).map((t) => h("span", { class: "chip" }, "🔧 " + t)));
+    info.textContent = [p.label, p.model_name].filter(Boolean).join(" · ");
+    info.title = (p.reasons || []).join("\n");
     if (p.revision > 1) addStep(`⟳ プロファイル再評価: ${(p.reasons || []).slice(-1)[0] || p.label}`);
     if (p.wait_for_quality) addStep("品質優先のため混雑中でも本来の設定で順番を待っています");
   });
   on("queue", (q) => {
-    if (q.started) statusLine.textContent = "実行中…";
-    else if (q.model_state === "loading") statusLine.textContent = `モデルを読み込み中… (待ち順位 ${q.position ?? "-"})`;
-    else if (q.position) statusLine.textContent = `待ち順位 ${q.position} / 推定待ち時間 ${fmtSecs(q.eta_seconds || 0)}`;
+    if (q.started) statusLine.textContent = "考えています…";
+    else if (q.model_state === "loading") statusLine.textContent = `モデルを準備しています… (待ち順位 ${q.position ?? "-"})`;
+    else if (q.position) statusLine.textContent = `順番待ち ${q.position}番目 · 約${fmtSecs(q.eta_seconds || 0)}`;
   });
-  on("step", (s) => { statusLine.textContent = `${PHASE[s.phase] || s.phase} (ステップ ${s.n}/${s.max})`; });
+  on("step", (s) => { statusLine.textContent = `${PHASE[s.phase] || s.phase}… (ステップ ${s.n}/${s.max})`; statusLine.parentElement.hidden = false; });
   on("plan", (p) => addStep("📋 計画:\n" + p.text));
-  on("tool_call", (t) => addStep(`🔧 ${t.name} ${t.args ? t.args.slice(0, 120) : ""}`));
+  on("tool_call", (t) => { addStep(`🔧 ${t.name} ${t.args ? t.args.slice(0, 120) : ""}`); statusLine.textContent = `${t.name} を実行中…`; statusLine.parentElement.hidden = false; });
   on("tool_result", (t) => addStep(`${t.ok ? "✓" : "✗"} ${t.name}: ${(t.summary || "").slice(0, 160)}`));
   on("verify", (v) => addStep(v.result === "pass" ? "✓ 検証OK" : "✗ 検証で問題を検出 → 修正中"));
   on("notice", (n) => addStep("ℹ " + n.message));
@@ -401,21 +644,30 @@ function attachLive(jobId) {
   on("error", (e) => addStep("⚠ " + (e.message || "エラー")));
   on("done", async (d) => {
     es.close(); S.streams.delete(jobId);
+    if (S.activeJob === jobId) { S.activeJob = null; updateSend(); }
     content.classList.remove("typing");
+    el.querySelector(".ai-avatar").classList.remove("spin");
     if (d.status !== "done") {
-      live.replaceChildren(h("div", { class: d.status === "cancelled" ? "muted" : "error" }, d.status === "cancelled" ? "停止しました" : `エラー: ${d.error || ""}`), steps);
+      statusLine.parentElement.hidden = false;
+      statusLine.className = d.status === "cancelled" ? "muted" : "error";
+      statusLine.textContent = d.status === "cancelled" ? "停止しました" : `エラー: ${d.error || ""}`;
+      el.querySelector(".msg-actions").append(iconBtn("refresh", "再生成", () => regenerate()));
       return;
     }
     if (S.view === "chat" && S.convId && chat.inner.contains(el)) {
       try {
         const conv = await api(`/api/conversations/${S.convId}`);
         const m = conv.messages.find((x) => x.job_id === jobId && x.role === "assistant");
-        if (m) { const fresh = renderMessage(m); if (steps.childElementCount) fresh.querySelector(".bubble").prepend(h("details", { class: "live" }, h("summary", {}, "実行ログ"), steps)); el.replaceWith(fresh); }
+        if (m) {
+          const fresh = renderMessage(m, true);
+          if (nsteps) fresh.querySelector(".body").prepend(stepsBox);
+          el.replaceWith(fresh);
+        }
       } catch { /* keep live view */ }
       loadConvs();
     }
   });
-  es.onerror = () => { if (es.readyState === EventSource.CLOSED) S.streams.delete(jobId); };
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED) { S.streams.delete(jobId); if (S.activeJob === jobId) { S.activeJob = null; updateSend(); } } };
 }
 
 // ---------------------------------------------------------------- create (image / video / music)

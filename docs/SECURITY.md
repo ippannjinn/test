@@ -20,6 +20,7 @@
 | プロンプトインジェクション | ツールの結果を外部データとして囲み、システムプロンプトでその中の指示に従わないよう明示 | `runners/chat.py`, `agent.py` |
 | 自動化トークン (Claude 等) | `nxt_` 付きランダムトークンをハッシュのみ保存、スコープ (member / debug / openai)、debug は管理APIの読み取りと診断実行のみ、localhost 限定、期限付き、再発行で旧トークン失効、アカウント停止・パスワードリセットで失効 | `auth/deps.py`, `service.py` |
 | OpenAI 互換 API のキー | メンバーが自分で発行する `openai` スコープのみのキー (Web 用 API・管理 API・キー管理には使えない)、Cookie では `/v1` を使えない (CSRF の対象外にしない)、期限必須・1人あたりの個数上限、管理者が全体を無効化・個別に失効可能、API 経由でも GPU キュー・レート制限・同時実行数の制限を適用 | `api/openai.py`, `api/account.py` |
+| 外部公開 (Tailscale Funnel) | Funnel はループバック専用の `server.tunnel_port` にだけ転送。そのポートへのリクエストは常にリモート扱い (管理 API・管理アプリのログイン拒否、プロキシヘッダがあっても localhost 扱いにしない)、接続元 IP は Tailscale が付与した X-Forwarded-For の末尾を使用、Origin は公開 URL のホストのみ追加で許可 | `app.py`, `auth/deps.py`, `cli.py` |
 | 監査 | ログイン成功・失敗、アカウント操作、端末の登録・解除・再利用の検知、設定変更、バックアップ・復元、モデル操作を `audit_log` に記録 | `audit.py` |
 
 ## 既知の制限

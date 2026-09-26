@@ -41,9 +41,21 @@ def cookie_names(settings) -> tuple[str, str]:
     return "nextai_sid", "nextai_dev"
 
 
+def via_tunnel(request: Request) -> bool:
+    return bool(request.scope.get("state", {}).get("via_tunnel"))
+
+
 def client_ip(request: Request) -> str:
     p = request.app.state.platform
     host = request.client.host if request.client else "0.0.0.0"
+    if via_tunnel(request):
+        # The tunnel (tailscaled) appends the real client address; earlier entries are client-controlled.
+        xff = request.headers.get("x-forwarded-for", "")
+        last = xff.split(",")[-1].strip()
+        try:
+            return str(ipaddress.ip_address(last))
+        except ValueError:
+            return "tunnel"
     if host in p.settings.server.trusted_proxies:
         xff = request.headers.get("x-forwarded-for")
         if xff:
@@ -57,7 +69,7 @@ _PROXY_HEADERS = ("x-forwarded-for", "forwarded", "x-real-ip", "cf-connecting-ip
 def is_local_admin_request(request: Request, ip: str) -> bool:
     """Loopback peer AND no proxy headers: a tunnel/reverse proxy on this PC must not make remote
     traffic look local to the admin API."""
-    if any(h in request.headers for h in _PROXY_HEADERS):
+    if via_tunnel(request) or any(h in request.headers for h in _PROXY_HEADERS):
         return False
     return is_loopback(ip)
 
@@ -95,6 +107,16 @@ def _resolve(request: Request) -> Ctx | None:
     return Ctx(p, user, sess, kind, client_ip(request))
 
 
+def allowed_origin_hosts(request: Request) -> set[str]:
+    hosts = {request.headers.get("host", "")}
+    public = request.app.state.platform.settings.server.public_url
+    if public:
+        hosts.add(public.split("://", 1)[-1].split("/", 1)[0])
+    if via_tunnel(request) and request.headers.get("x-forwarded-host"):
+        hosts.add(request.headers["x-forwarded-host"])
+    return hosts
+
+
 def require_user(request: Request, _admin: bool = False) -> Ctx:
     ctx = _resolve(request)
     if ctx is None:
@@ -106,7 +128,7 @@ def require_user(request: Request, _admin: bool = False) -> Ctx:
         if not sent or not safe_equal(sent, ctx.session["csrf_token"]):
             raise ApiError(403, "csrf", "CSRFトークンが無効です。ページを再読み込みしてください")
         origin = request.headers.get("origin")
-        if origin and origin.split("://", 1)[-1] != request.headers.get("host", ""):
+        if origin and origin.split("://", 1)[-1] not in allowed_origin_hosts(request):
             raise ApiError(403, "bad_origin", "不正なオリジンからのリクエストです")
     if ctx.user["must_change_password"] and request.url.path not in PASSWORD_GATE_ALLOWED:
         raise ApiError(403, "password_change_required", "初回ログインのためパスワードの変更が必要です")

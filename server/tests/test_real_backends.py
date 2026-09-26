@@ -198,3 +198,30 @@ def test_platform_real_mode_end_to_end(tmp_path):
         assert r.status_code == 200 and r.json()["choices"][0]["message"]["content"] == "こんにちは、世界"
         r = c.post("/v1/chat/completions", headers=h, json={"messages": [{"role": "user", "content": "hi"}], "stream": True})
         assert "こんにちは" in r.text and r.text.rstrip().endswith("data: [DONE]")
+
+
+def test_cuda_build_selection_and_upgrade(tmp_path, monkeypatch):
+    from nextai.install import runtime as rt_mod
+
+    monkeypatch.setattr(rt_mod, "IS_WIN", True)
+    assets = [{"name": n, "browser_download_url": "x"} for n in (
+        "llama-b11193-bin-win-cpu-x64.zip", "llama-b11193-bin-win-vulkan-x64.zip",
+        "llama-b11193-bin-win-cuda-12.4-x64.zip", "llama-b11193-bin-win-cuda-13.4-x64.zip",
+        "cudart-llama-bin-win-cuda-12.4-x64.zip", "cudart-llama-bin-win-cuda-13.4-x64.zip")]
+    accel, main, cudart = rt_mod.pick_llama_assets(assets, "13.4")
+    assert accel == "cuda-13.4" and main["name"].endswith("cuda-13.4-x64.zip") and cudart["name"].startswith("cudart")
+    assert rt_mod.pick_llama_assets(assets, "12.8")[0] == "cuda-12.4"
+    assert rt_mod.pick_llama_assets(assets, None)[0] == "vulkan"
+
+    s = make_settings(tmp_path)
+    inst = rt_mod.RuntimeInstaller(s, lambda ev: None)
+    inst.manifest["llama.cpp"] = {"version": "b11193", "accel": "vulkan", "exe": "x"}
+    monkeypatch.setattr(rt_mod, "driver_cuda_version", lambda: "13.4")
+    assert inst.needs_upgrade("llama.cpp")
+    inst.manifest["llama.cpp"]["cuda_failed"] = {"version": "b11193"}
+    assert not inst.needs_upgrade("llama.cpp")
+    inst.manifest["llama.cpp"] = {"version": "b11193", "accel": "cuda-13.4", "exe": "x"}
+    assert not inst.needs_upgrade("llama.cpp")
+    monkeypatch.setattr(rt_mod, "driver_cuda_version", lambda: None)
+    inst.manifest["llama.cpp"] = {"version": "b11193", "accel": "vulkan", "exe": "x"}
+    assert not inst.needs_upgrade("llama.cpp")

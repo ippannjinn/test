@@ -43,7 +43,9 @@ def invitation_text(p, user: dict, password: str | None) -> str:
     urls = _urls(p)
     main = next((u["url"] for u in urls if u["kind"] in ("public", "lan", "tailscale")), urls[0]["url"])
     lines = [f"【{p.settings.server.name} へのご招待】", "", f"接続URL: {main}"]
-    extra = [u for u in urls if u["url"] != main and u["kind"] in ("lan", "tailscale", "public")]
+    public = any(u["kind"] == "public" for u in urls)
+    # With a public (Funnel) URL that is the one to share: no LAN addresses or local-CA steps for outside friends.
+    extra = [] if public else [u for u in urls if u["url"] != main and u["kind"] in ("lan", "tailscale", "public")]
     for u in extra[:3]:
         lines.append(f"  (別経路: {u['url']} - {u['label']})")
     lines += [f"ユーザー名: {user['username']}"]
@@ -51,7 +53,7 @@ def invitation_text(p, user: dict, password: str | None) -> str:
         lines.append(f"初期パスワード: {password}")
     lines += ["", "初回ログイン後、パスワードの変更をお願いします。",
               "「この端末を信頼する」にチェックすると、次回から再ログインが不要になります。"]
-    if p.settings.server.tls and not p.settings.server.cert_file:
+    if p.settings.server.tls and not p.settings.server.cert_file and not public:
         ca = p.settings.paths.certs / "ca.crt"
         if ca.exists():
             lines += ["", "ブラウザに証明書の警告が出る場合は、以下からCA証明書をインストールしてください:",
@@ -753,7 +755,8 @@ def server_info(ctx: Admin):
             "data_dir": str(p.settings.paths.data_dir), "uptime_seconds": int(now() - p.started_at),
             "urls": _urls(p), "ca_fingerprint": fingerprint_sha256(ca) if ca.exists() else None,
             "backend_mode": p.backends.mode, "backends": p.backends.status(), "sandbox": p.sandbox.name,
-            "gpu_provider": p.gpu.name}
+            "gpu_provider": p.gpu.name, "tunnel_port": p.settings.server.tunnel_port,
+            "public_url": p.settings.server.public_url}
 
 
 @router.post("/cleanup")

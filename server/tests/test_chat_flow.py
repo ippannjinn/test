@@ -178,3 +178,28 @@ def test_admin_dashboard_models_and_queue(client, platform):
     b = client.post("/api/admin/backup", json={"include_user_files": True}, headers=h)
     assert b.status_code == 200
     assert client.get("/api/admin/backups", headers=h).json()["backups"]
+
+
+def test_regenerate_and_edit(client, platform):
+    from conftest import create_member, wait_job, web_login
+
+    create_member(platform, "regen")
+    web_login(client, "regen")
+    r = client.post("/api/conversations/new/messages", json={"content": "一つ目"}).json()
+    cid = r["conversation_id"]
+    wait_job(client, r["job"]["id"])
+    r2 = client.post(f"/api/conversations/{cid}/messages", json={"content": "二つ目"}).json()
+    wait_job(client, r2["job"]["id"])
+    msgs = client.get(f"/api/conversations/{cid}").json()["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user", "assistant"]
+    # regenerate replaces only the last answer
+    g = client.post(f"/api/conversations/{cid}/regenerate", json={}).json()
+    wait_job(client, g["job"]["id"])
+    msgs = client.get(f"/api/conversations/{cid}").json()["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user", "assistant"]
+    assert msgs[-1]["job_id"] == g["job"]["id"]
+    # editing the first message drops it and everything after
+    e = client.post(f"/api/conversations/{cid}/messages", json={"content": "編集後", "replace_from": msgs[0]["id"]}).json()
+    wait_job(client, e["job"]["id"])
+    msgs = client.get(f"/api/conversations/{cid}").json()["messages"]
+    assert [m["content"] for m in msgs if m["role"] == "user"] == ["編集後"] and len(msgs) == 2

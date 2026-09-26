@@ -43,6 +43,11 @@ class SecurityMiddleware:
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
         s = self.p.settings.server
+        server = scope.get("server") or ("", 0)
+        if s.tunnel_port and server[1] == s.tunnel_port:
+            # Arrived on the loopback-only listener that Tailscale Funnel (or another tunnel) forwards
+            # internet traffic to: never treated as local, client IP taken from the tunnel's header.
+            scope.setdefault("state", {})["via_tunnel"] = True
         limit = s.max_upload_mb * 2**20 + 65536 if path in UPLOAD_PATHS else s.max_json_kb * 1024
         if path in LARGE_JSON_PATHS:
             limit = max(limit, 24 * 2**20)
