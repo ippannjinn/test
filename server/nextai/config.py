@@ -76,6 +76,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "backend_mode": "auto",
         "strategy": "single",
         "primary_model": "",
+        "max_ram_offload_gb": 4,
+        "auto_ladder": True,
         "resident_fast_model": True,
         "idle_unload_seconds": 900,
         "prefetch": True,

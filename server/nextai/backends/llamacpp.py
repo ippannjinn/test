@@ -45,6 +45,13 @@ class LlamaCppBackend(LLMBackend):
         self._help: str | None = None
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=600, write=60, pool=30), trust_env=False)
 
+    def reload(self, runtime_dir: Path) -> None:
+        """Pick up a newly installed llama.cpp (it goes into a new versioned folder, so running servers are
+        untouched; only models loaded from now on use it)."""
+        exe = find_executable(runtime_dir, "llama.cpp", ["llama-server"])
+        if exe is not None:
+            self.exe, self.available, self._help = exe, True, None
+
     def help_text(self) -> str:
         if self._help is None:
             try:

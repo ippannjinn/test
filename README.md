@@ -73,20 +73,27 @@ PowerShell・bash・Docker Compose の操作や、モデルの手動配置は不
 
 各部の設計は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、セキュリティは [docs/SECURITY.md](docs/SECURITY.md) を参照してください。
 
-### 既定モデル (12GB 標準セット、約77GB)
+### 既定モデル (12GB 標準セット、約66GB)
+
+文章モデルは「段階的なモデルの梯子」です。いちばん賢い段が空きメモリに載らないときは、4B まで一気に落ちず、すぐ下の段が答えます。
+
+| 段 | モデル | 大きさ (Q4) | 配置 |
+|---|---|---|---|
+| 20B (主力) | gpt-oss 20B (MoE, ネイティブ MXFP4) | 約12GB | ほぼ VRAM に収まる |
+| 15B | Qwen3 30B-A3B Instruct 2507 を REAP で専門家剪定した 15B (MoE) | 約10GB | VRAM に収まる |
+| 8B | Qwen3 8B | 約5GB | VRAM |
+| 4B | Qwen3 4B Instruct 2507 | 約2.5GB | VRAM |
 
 | 用途 | モデル | 配置 |
 |---|---|---|
-| 軽量・高速 | Qwen3 4B Instruct 2507 (Q4_K_M) | VRAM に常駐 |
-| 汎用 | Qwen3 30B-A3B Instruct 2507 (MoE, Q4_K_M) | Attention と KV は VRAM、Expert は VRAM/RAM/NVMe に分割 |
-| コーディング | Qwen3 Coder 30B-A3B (MoE) | 同上 |
 | 画像理解・OCR | Qwen2.5-VL 7B + mmproj | 必要時にロード |
 | 埋め込み | Qwen3 Embedding 0.6B | CPU |
 | 画像生成 | FLUX.1 schnell (GGUF Q4) | 必要時のみ (一時的) |
 | 動画生成 | Wan2.1 T2V 1.3B | 必要時のみ。短尺・低解像度 |
 | 音楽生成 | MusicGen small | 必要時のみ。**非商用ライセンス** |
 
-フルセット (`rtx12g-full`) では、推論特化の gpt-oss-20b が追加されます。管理コンソールから Hugging Face の GGUF モデルを追加することもできます。
+Qwen3 30B-A3B / Coder 30B-A3B は、RAM 32GB 以上向けの任意セット (`rtx12g-full`) に入っています。12GB GPU では専門家の一部が RAM にはみ出して PC 全体が重くなるため、既定では選びません (`models.max_ram_offload_gb`)。
+管理コンソールから Hugging Face の GGUF モデルを追加することもできます。
 
 ## 開発
 

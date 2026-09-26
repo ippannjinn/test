@@ -184,8 +184,100 @@ class Platform:
         self._spawn(self._watch_stop_flag())
         self.sandbox.reload()
         self._spawn(self.ensure_full_python())
+        self._spawn(self._runtime_watch())
+        self._spawn(self.ensure_ladder())
         log.info("platform started v%s backends=%s gpu=%s sandbox=%s", self.version, self.backends.mode,
                  self.gpu.name, self.sandbox.name)
+
+    async def _runtime_watch(self) -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await self.update_llama_if_needed()
+            except Exception:  # noqa: BLE001
+                log.exception("llama.cpp update check failed")
+
+    async def update_llama_if_needed(self) -> bool:
+        """A model failed because its architecture is newer than the installed llama.cpp (e.g. Qwen3.6):
+        install the latest llama.cpp release next to the current one and use it for new loads. Meanwhile the
+        next rung of the model ladder answers. At most once every 6 hours."""
+        wanted = self.models.llama_update_wanted
+        if not wanted or not self.settings.tools.auto_install or self.backends.mode == "mock":
+            return False
+        if time.time() - getattr(self, "_llama_update_at", 0.0) < 6 * 3600:
+            return False
+        self._llama_update_at = time.time()
+        from .install.runtime import RuntimeInstaller
+
+        log.info("updating llama.cpp for %s", sorted(wanted))
+        res = await asyncio.to_thread(lambda: RuntimeInstaller(self.settings, lambda ev: None)
+                                      .install(["llama.cpp"], force=True))
+        if isinstance(res.get("llama.cpp"), str):
+            log.warning("llama.cpp update failed: %s", res["llama.cpp"])
+            return False
+        self.backends.llm.reload(self.settings.paths.runtime)
+        for mid in list(wanted):
+            self.models.runtimes[mid].failed_at = 0.0
+        wanted.clear()
+        log.info("llama.cpp updated to %s", res["llama.cpp"].get("version"))
+        return True
+
+    def missing_ladder(self) -> list[str]:
+        """Rungs of the model ladder recommended for this PC that are not installed yet (strongest first).
+        PCs set up before the ladder existed only had the 4B and 30B models: without the rungs in between,
+        falling back from the 30B meant jumping straight to the 4B."""
+        snap = self.monitor.latest
+        if snap is None:
+            return []
+        vram = snap.gpu.vram_total_mb / 1024 if snap.gpu else 0
+        sel = self.catalog.select_set(vram_gb=vram, ram_gb=snap.ram_total_mb / 1024, disk_free_gb=10**6)
+        if not sel["selected"]:
+            return []
+        rungs = [self.catalog.get(m) for m in self.catalog.set_by_id(sel["selected"])["models"]]
+        rungs = sorted((m for m in rungs if m.kind == "llm" and m.ladder), key=lambda m: -m.ladder["tier"])
+        return [m.id for m in rungs if not self.models.is_installed(m.id) and self.models.is_enabled(m.id)]
+
+    async def ensure_ladder(self) -> list[str]:
+        """Download the missing rungs in the background (one at a time, shown in the admin console's model list)."""
+        if not self.settings.models.auto_ladder or self.backends.mode == "mock":
+            return []
+        await asyncio.sleep(90)
+        from .install.models import install_models
+
+        done = []
+        for mid in self.missing_ladder():
+            if self.governor.state.disk != "ok":
+                log.info("model ladder: disk is low, not downloading %s", mid)
+                break
+            if (self.downloads.get(mid) or {}).get("state") == "running":
+                continue
+            import threading
+
+            state: dict[str, Any] = {"state": "running", "done": 0, "total": 0, "started_at": time.time(),
+                                     "cancel": threading.Event(), "error": None, "auto": True}
+            self.downloads[mid] = state
+
+            def emit(ev: dict, state=state) -> None:
+                if ev.get("event") == "progress":
+                    state["done"], state["total"] = ev.get("overall_done", 0), ev.get("overall_total", 0)
+                    state["file"] = ev.get("file")
+                elif ev.get("event") == "model_error":
+                    state["error"] = ev.get("error")
+
+            log.info("model ladder: downloading %s", mid)
+            try:
+                res = await asyncio.to_thread(install_models, self.settings, self.db, self.catalog, [mid], emit,
+                                              state["cancel"])
+                ok = res.get(mid) == "ok"
+                state["state"], state["error"] = ("done", None) if ok else ("error", state["error"] or res.get(mid))
+            except Exception as e:  # noqa: BLE001 - try the next rung
+                state["state"], state["error"] = "error", str(e)[:500]
+            state["finished_at"] = time.time()
+            if state["state"] == "done":
+                done.append(mid)
+            else:
+                log.warning("model ladder: %s failed: %s", mid, state["error"])
+        return done
 
     async def ensure_full_python(self) -> bool:
         """Install the full Python sandbox (Pyodide + numpy/pandas/matplotlib/...) in the background; until it is

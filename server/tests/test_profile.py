@@ -51,10 +51,10 @@ def test_greeting_is_speed_but_keeps_the_strong_model(engine):
     """Single-model strategy: speed mode does not drop to the tiny model (that made answers suddenly dumb)."""
     eng, *_ = engine
     p = eng.decide(analyze("こんにちは"))
-    assert p.label == "速度特化" and p.model_id == "qwen3-30b-a3b-instruct" and not p.use_agent
-    assert p.priority_class == "interactive" and p.reasoning == "off"
+    assert p.label == "速度特化" and p.model_id == "gpt-oss-20b" and not p.use_agent
+    assert p.priority_class == "interactive" and p.reasoning == "low"
     for text in ("量子力学と古典力学の違いを比較して分析して", "今日の東京の天気を調べて"):
-        assert eng.decide(analyze(text)).model_id == "qwen3-30b-a3b-instruct"
+        assert eng.decide(analyze(text)).model_id == "gpt-oss-20b"
 
 
 def test_adaptive_strategy_still_uses_fast_model(tmp_path):
@@ -73,7 +73,8 @@ def test_complex_coding_is_autonomous_with_tools(engine):
     text = "次の要件でWebスクレイパーのCLIツールを作って。\n1. URLを受け取る\n2. リンクを抽出\n3. テストを書く\nそして動作を検証して"
     p = eng.decide(analyze(text))
     assert p.tuning >= 0.75 and p.use_agent and p.plan and p.verify
-    assert p.model_id == "qwen3-coder-30b-a3b"
+    # the 30B Coder would spill ~8GB into RAM on a 12GB GPU: the rung that fits the GPU is used instead
+    assert p.model_id == "gpt-oss-20b" and any("RAM" in r for r in p.reasons)
     assert {"write_file", "run_code"} <= set(p.tools)
     assert p.limits["max_steps"] > 6 and p.limits["max_consecutive_failures"] >= 1
 
@@ -149,11 +150,25 @@ def test_moe_planner_offloads_experts():
 
 def test_model_set_selection():
     cat = Catalog.load()
-    assert cat.select_set(vram_gb=11.9, ram_gb=31.5, disk_free_gb=131)["selected"] == "rtx12g-standard"
+    assert cat.select_set(vram_gb=11.9, ram_gb=63.8, disk_free_gb=300)["selected"] == "rtx12g-standard"
+    assert not cat.set_by_id("rtx12g-full")["auto"]  # the 30B models are opt-in only
+    assert cat.select_set(vram_gb=11.9, ram_gb=31.5, disk_free_gb=300)["selected"] == "rtx12g-standard"
     assert cat.select_set(vram_gb=11.9, ram_gb=31.5, disk_free_gb=70)["selected"] == "gpu-compact"
-    assert cat.select_set(vram_gb=0, ram_gb=16, disk_free_gb=40)["selected"] == "minimal"
-    std = cat.set_by_id("rtx12g-standard")
-    assert cat.set_size_gb(std) + 15 < 131
+    assert cat.select_set(vram_gb=0, ram_gb=16, disk_free_gb=40)["selected"] == "cpu-16"
+    assert cat.select_set(vram_gb=0, ram_gb=8, disk_free_gb=40)["selected"] == "minimal"
+    for s in cat.sets:
+        assert cat.set_size_gb(s) + 10 < s["requires"]["disk_free_gb"]
+
+
+def test_every_set_installs_a_gradual_ladder():
+    """No set jumps from a big model straight to the tiny one: consecutive rungs stay within ~2.2x in size."""
+    cat = Catalog.load()
+    for s in cat.sets:
+        rungs = sorted((cat.get(m) for m in s["models"] if cat.get(m).kind == "llm" and cat.get(m).ladder),
+                       key=lambda m: -m.ladder["tier"])
+        assert rungs, s["id"]
+        for big, small in zip(rungs, rungs[1:]):
+            assert big.size_gb / small.size_gb <= 2.2, (s["id"], big.id, small.id)
 
 
 def test_web_search_is_always_available_for_real_questions(engine):
@@ -210,5 +225,36 @@ def test_plain_chat_is_not_analysis():
 
 def test_when_the_big_model_does_not_fit_the_next_strong_one_is_used(engine, monkeypatch):
     eng, _, _, mgr = engine
-    monkeypatch.setattr(mgr, "fits_now", lambda mid: mid not in ("qwen3-30b-a3b-instruct", "qwen3-coder-30b-a3b"))
+    big = ("gpt-oss-20b", "qwen3-30b-a3b-instruct", "qwen3-coder-30b-a3b")
+    monkeypatch.setattr(mgr, "fits_now", lambda mid: mid not in big)
+    chosen = eng.decide(analyze("こんにちは")).model_id
+    assert chosen == "qwen3-30b-a3b-reap-15b"  # the next rung, never a jump to the 4B model
+
+
+def test_a_model_that_failed_to_load_is_skipped_for_a_while(engine):
+    eng, _, _, mgr = engine
+    import time as _t
+
+    rt = mgr.runtimes["gpt-oss-20b"]
+    rt.state, rt.failed_at = "error", _t.time()
+    p = eng.decide(analyze("こんにちは"))
+    assert p.model_id == "qwen3-30b-a3b-reap-15b" and any("次の段" in r for r in p.reasons)
+    rt.failed_at = _t.time() - 7200
     assert eng.decide(analyze("こんにちは")).model_id == "gpt-oss-20b"
+
+
+def test_ram_offload_limit(tmp_path):
+    eng, _, _, mgr = _engine(tmp_path)
+    assert mgr.too_heavy("qwen3-30b-a3b-instruct") and not mgr.too_heavy("gpt-oss-20b")
+    eng2, _, _, mgr2 = _engine(tmp_path / "b", models={"max_ram_offload_gb": 0})
+    assert not mgr2.too_heavy("qwen3-30b-a3b-instruct")
+    assert eng2.decide(analyze("こんにちは")).model_id == "qwen3-30b-a3b-instruct"
+
+
+def test_missing_ladder_rungs_are_found_for_old_installs(platform, monkeypatch):
+    """A PC set up with the old set (4B + 30B) gets the rungs in between, strongest first."""
+    have = {"qwen3-4b-instruct", "qwen3-30b-a3b-instruct", "qwen3-coder-30b-a3b"}
+    monkeypatch.setattr(platform.models, "is_installed", lambda mid: mid in have)
+    assert platform.missing_ladder() == ["gpt-oss-20b", "qwen3-30b-a3b-reap-15b", "qwen3-8b"]
+    have |= {"gpt-oss-20b", "qwen3-30b-a3b-reap-15b", "qwen3-8b"}
+    assert platform.missing_ladder() == []

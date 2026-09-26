@@ -267,11 +267,24 @@ class ProfileEngine:
         if not cands:
             prof.reasons.append("利用可能なモデルがありません")
             return
+        healthy = [s for s in cands if not self.manager.recently_failed(s.id)]
+        if healthy and len(healthy) < len(cands):
+            prof.reasons.append("読み込みに失敗したモデルを一時的に避けて次の段のモデルを使用")
+            cands = healthy
+        light = [s for s in cands if not self.manager.too_heavy(s.id)]
+        if light and len(light) < len(cands):
+            prof.reasons.append("RAMへのはみ出しが大きいモデルは避け、GPUに収まる段のモデルを使用")
+            cands = light
         ranked = sorted(cands, key=lambda s: self._score_model(s, prof, a), reverse=True)
         fitting = [s for s in ranked if self.manager.fits_now(s.id)]
         if fitting and fitting[0] is not ranked[0]:
             prof.reasons.append(f"{ranked[0].display_name} は現在の空きメモリでは載らないため見送り")
             ranked = fitting + [s for s in ranked if s not in fitting]
+        pin = self.settings.models.primary_model
+        if pin and self.settings.models.strategy == "single":
+            pinned = [s for s in ranked if s.id == pin and self.manager.fits_now(s.id)]
+            if pinned:
+                ranked = pinned + [s for s in ranked if s.id != pin]
         best = ranked[0]
         prof.model_id, prof.model_name = best.id, best.display_name
         prof.fallback_models = [s.id for s in ranked[1:]]

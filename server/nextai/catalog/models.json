@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "notes": "Files are resolved on the target PC via the Hugging Face tree API using ordered repo/pattern candidates. Checksums come from HF LFS metadata (sha256) and are verified after download.",
+  "notes": "Files are resolved on the target PC via the Hugging Face tree API using ordered repo/pattern candidates. Checksums come from HF LFS metadata (sha256) and are verified after download. LLMs carry ladder {family, tier}: a set installs several rungs so that when the strongest model does not fit in free memory the next-strongest one is used, not a jump to the smallest.",
   "models": [
     {
       "id": "qwen3-4b-instruct",
@@ -23,7 +23,8 @@
       "speed": 0.95,
       "ctx_max": 32768,
       "defaults": {"ctx": 16384, "parallel": 4},
-      "reasoning_control": "none"
+      "reasoning_control": "none",
+      "ladder": {"family": "general", "tier": 4}
     },
     {
       "id": "qwen3-30b-a3b-instruct",
@@ -46,7 +47,8 @@
       "speed": 0.7,
       "ctx_max": 262144,
       "defaults": {"ctx": 32768, "parallel": 4},
-      "reasoning_control": "none"
+      "reasoning_control": "none",
+      "ladder": {"family": "general", "tier": 30}
     },
     {
       "id": "qwen3-coder-30b-a3b",
@@ -90,7 +92,54 @@
       "speed": 0.72,
       "ctx_max": 131072,
       "defaults": {"ctx": 32768, "parallel": 2},
-      "reasoning_control": "effort"
+      "reasoning_control": "effort",
+      "ladder": {"family": "general", "tier": 20}
+    },
+    {
+      "id": "qwen3-30b-a3b-reap-15b",
+      "display_name": "Qwen3 30B-A3B Instruct 2507 REAP 15B (MoE, 専門家剪定)",
+      "kind": "llm",
+      "roles": ["general", "chat"],
+      "backend": "llamacpp",
+      "license": "Apache-2.0",
+      "storage_group": "text",
+      "size_gb": 9.9,
+      "components": {
+        "model": [
+          {"repo": "12bitmisfit/Qwen3-30B-A3B-Instruct-2507_Pruned_REAP-15B-A3B-GGUF", "patterns": ["*Q4_K_M.gguf", "*Q4_K_S.gguf"]}
+        ]
+      },
+      "arch": {"n_layers": 48, "n_kv_heads": 4, "head_dim": 128, "moe": true, "expert_fraction": 0.89, "n_experts": 64, "n_active_experts": 8, "total_params_b": 16.0, "active_params_b": 3.3},
+      "capabilities": {"chat": 0.72, "coding": 0.6, "reasoning": 0.66, "tools": 0.7, "japanese": 0.7, "writing": 0.7, "vision": 0.0},
+      "speed": 0.75,
+      "ctx_max": 262144,
+      "defaults": {"ctx": 32768, "parallel": 4},
+      "reasoning_control": "none",
+      "ladder": {"family": "general", "tier": 15}
+    },
+    {
+      "id": "qwen3-8b",
+      "display_name": "Qwen3 8B",
+      "kind": "llm",
+      "roles": ["chat"],
+      "backend": "llamacpp",
+      "license": "Apache-2.0",
+      "storage_group": "text",
+      "size_gb": 5.0,
+      "components": {
+        "model": [
+          {"repo": "Qwen/Qwen3-8B-GGUF", "patterns": ["*Q4_K_M.gguf"]},
+          {"repo": "unsloth/Qwen3-8B-GGUF", "patterns": ["*Q4_K_M.gguf"]},
+          {"repo": "bartowski/Qwen_Qwen3-8B-GGUF", "patterns": ["*Q4_K_M.gguf"]}
+        ]
+      },
+      "arch": {"n_layers": 36, "n_kv_heads": 8, "head_dim": 128, "moe": false, "expert_fraction": 0.0, "total_params_b": 8.2, "active_params_b": 8.2},
+      "capabilities": {"chat": 0.68, "coding": 0.6, "reasoning": 0.62, "tools": 0.65, "japanese": 0.66, "writing": 0.64, "vision": 0.0},
+      "speed": 0.85,
+      "ctx_max": 32768,
+      "defaults": {"ctx": 16384, "parallel": 4},
+      "reasoning_control": "qwen3_toggle",
+      "ladder": {"family": "general", "tier": 8}
     },
     {
       "id": "qwen25-vl-7b",
@@ -168,9 +217,7 @@
           {"repo": "comfyanonymous/flux_text_encoders", "patterns": ["t5xxl_fp8_e4m3fn.safetensors"]}
         ]
       },
-      "args": ["--diffusion-model", "{diffusion}", "--vae", "{vae}", "--clip_l", "{clip_l}", "--t5xxl", "{t5xxl}",
-               "-p", "{prompt}", "--cfg-scale", "1.0", "--sampling-method", "euler", "--steps", "{steps}",
-               "-W", "{width}", "-H", "{height}", "-s", "{seed}", "-o", "{output}"],
+      "args": ["--diffusion-model", "{diffusion}", "--vae", "{vae}", "--clip_l", "{clip_l}", "--t5xxl", "{t5xxl}", "-p", "{prompt}", "--cfg-scale", "1.0", "--sampling-method", "euler", "--steps", "{steps}", "-W", "{width}", "-H", "{height}", "-s", "{seed}", "-o", "{output}"],
       "optional_args": ["--clip-on-cpu", "--vae-tiling", "--diffusion-fa"],
       "defaults": {"steps": 4, "width": 1024, "height": 1024, "seconds_estimate": 25},
       "capabilities": {"image": 0.8},
@@ -199,10 +246,7 @@
           {"repo": "Comfy-Org/Wan_2.1_ComfyUI_repackaged", "patterns": ["split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"]}
         ]
       },
-      "args": ["-M", "vid_gen", "--diffusion-model", "{diffusion}", "--vae", "{vae}", "--t5xxl", "{t5xxl}",
-               "-p", "{prompt}", "-n", "{negative}", "--cfg-scale", "6.0", "--sampling-method", "euler",
-               "--steps", "{steps}", "-W", "{width}", "-H", "{height}", "--video-frames", "{frames}",
-               "--flow-shift", "3.0", "-s", "{seed}", "-o", "{output}"],
+      "args": ["-M", "vid_gen", "--diffusion-model", "{diffusion}", "--vae", "{vae}", "--t5xxl", "{t5xxl}", "-p", "{prompt}", "-n", "{negative}", "--cfg-scale", "6.0", "--sampling-method", "euler", "--steps", "{steps}", "-W", "{width}", "-H", "{height}", "--video-frames", "{frames}", "--flow-shift", "3.0", "-s", "{seed}", "-o", "{output}"],
       "optional_args": ["--diffusion-fa", "--vae-tiling", "--clip-on-cpu"],
       "defaults": {"steps": 20, "width": 832, "height": 480, "frames": 33, "fps": 16, "seconds_estimate": 360},
       "capabilities": {"video": 0.55},
@@ -221,9 +265,7 @@
       "vram_mb": 3000,
       "components": {
         "snapshot": [
-          {"repo": "facebook/musicgen-small", "mode": "all",
-           "patterns": ["config.json", "generation_config.json", "model.safetensors", "preprocessor_config.json",
-                        "special_tokens_map.json", "spiece.model", "tokenizer.json", "tokenizer_config.json"]}
+          {"repo": "facebook/musicgen-small", "mode": "all", "patterns": ["config.json", "generation_config.json", "model.safetensors", "preprocessor_config.json", "special_tokens_map.json", "spiece.model", "tokenizer.json", "tokenizer_config.json"]}
         ]
       },
       "defaults": {"seconds": 15, "seconds_estimate": 40},
@@ -241,35 +283,44 @@
   "sets": [
     {
       "id": "rtx12g-standard",
-      "name": "12GB GPU 標準セット (推奨)",
+      "name": "12GB GPU 標準 (20B〜4B の段階的モデル・VRAM中心で軽快)",
       "auto": true,
-      "requires": {"vram_gb": 10.5, "ram_gb": 24, "disk_free_gb": 105},
-      "models": ["qwen3-4b-instruct", "qwen3-30b-a3b-instruct", "qwen3-coder-30b-a3b", "qwen25-vl-7b",
+      "requires": {"vram_gb": 10.5, "ram_gb": 15, "disk_free_gb": 84},
+      "models": ["gpt-oss-20b", "qwen3-30b-a3b-reap-15b", "qwen3-8b", "qwen3-4b-instruct", "qwen25-vl-7b",
                  "qwen3-embedding-0.6b", "flux1-schnell", "wan21-t2v-1.3b", "musicgen-small"],
       "runtimes": ["llama.cpp", "sd.cpp", "python-wasm", "musicgen"]
     },
     {
       "id": "rtx12g-full",
-      "name": "12GB GPU フルセット (推論特化モデル追加)",
+      "name": "12GB GPU + 30B MoE (RAM 32GB以上向け・重め)",
       "auto": false,
-      "requires": {"vram_gb": 10.5, "ram_gb": 28, "disk_free_gb": 120},
-      "models": ["qwen3-4b-instruct", "qwen3-30b-a3b-instruct", "qwen3-coder-30b-a3b", "gpt-oss-20b", "qwen25-vl-7b",
-                 "qwen3-embedding-0.6b", "flux1-schnell", "wan21-t2v-1.3b", "musicgen-small"],
+      "requires": {"vram_gb": 10.5, "ram_gb": 31, "disk_free_gb": 125},
+      "models": ["qwen3-30b-a3b-instruct", "qwen3-coder-30b-a3b", "gpt-oss-20b", "qwen3-30b-a3b-reap-15b", "qwen3-8b",
+                 "qwen3-4b-instruct", "qwen25-vl-7b", "qwen3-embedding-0.6b", "flux1-schnell", "wan21-t2v-1.3b",
+                 "musicgen-small"],
       "runtimes": ["llama.cpp", "sd.cpp", "python-wasm", "musicgen"]
     },
     {
       "id": "gpu-compact",
-      "name": "コンパクト (テキスト+画像)",
+      "name": "コンパクト (15B〜4B の段階的モデル + 画像)",
       "auto": true,
-      "requires": {"vram_gb": 7.5, "ram_gb": 16, "disk_free_gb": 55},
-      "models": ["qwen3-4b-instruct", "qwen3-30b-a3b-instruct", "qwen3-embedding-0.6b", "flux1-schnell"],
+      "requires": {"vram_gb": 7.5, "ram_gb": 15, "disk_free_gb": 47},
+      "models": ["qwen3-30b-a3b-reap-15b", "qwen3-8b", "qwen3-4b-instruct", "qwen3-embedding-0.6b", "flux1-schnell"],
       "runtimes": ["llama.cpp", "sd.cpp", "python-wasm"]
+    },
+    {
+      "id": "cpu-16",
+      "name": "GPUなし (8B / 4B)",
+      "auto": true,
+      "requires": {"vram_gb": 0, "ram_gb": 15, "disk_free_gb": 22},
+      "models": ["qwen3-8b", "qwen3-4b-instruct", "qwen3-embedding-0.6b"],
+      "runtimes": ["llama.cpp", "python-wasm"]
     },
     {
       "id": "minimal",
       "name": "最小構成 (軽量テキストのみ)",
       "auto": true,
-      "requires": {"vram_gb": 0, "ram_gb": 8, "disk_free_gb": 22},
+      "requires": {"vram_gb": 0, "ram_gb": 7, "disk_free_gb": 17},
       "models": ["qwen3-4b-instruct", "qwen3-embedding-0.6b"],
       "runtimes": ["llama.cpp", "python-wasm"]
     }

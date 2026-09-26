@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -19,6 +20,25 @@ from .catalog import LLM_KINDS, Catalog, ModelSpec
 from .planner import LaunchPlan, plan_llm, plan_media
 
 log = logging.getLogger("nextai.models")
+
+_ARCH_ERR = re.compile(r"unknown model architecture|unknown architecture|unsupported model architecture", re.I)
+
+
+def _arch_unsupported(message: str) -> bool:
+    """llama-server exited because the GGUF's architecture is newer than the build (read from its log)."""
+    if _ARCH_ERR.search(message):
+        return True
+    m = re.search(r"ログ: (.+?)(\n|$)", message)
+    if not m:
+        return False
+    try:
+        with open(m.group(1).strip(), "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 32768))
+            return bool(_ARCH_ERR.search(f.read().decode("utf-8", "replace")))
+    except OSError:
+        return False
+
 
 COLD, WARM, LOADING, HOT, UNLOADING, ERROR = "cold", "warm", "loading", "hot", "unloading", "error"
 
@@ -38,6 +58,7 @@ class ModelRuntime:
     loaded_at: float = 0.0
     load_seconds: deque = field(default_factory=lambda: deque(maxlen=8))
     error: str = ""
+    failed_at: float = 0.0
     warm_until: float = 0.0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -52,6 +73,7 @@ class ModelRuntime:
 class ModelManager:
     def __init__(self, settings: Settings, db: Database, catalog: Catalog, backends: Backends, governor: Governor):
         self.settings, self.db, self.catalog, self.backends, self.governor = settings, db, catalog, backends, governor
+        self.llama_update_wanted: set[str] = set()
         self.runtimes: dict[str, ModelRuntime] = {mid: ModelRuntime(spec) for mid, spec in catalog.models.items()}
         self.load_events: deque[float] = deque(maxlen=200)
         self.swap_log: deque[dict[str, Any]] = deque(maxlen=100)
@@ -128,6 +150,30 @@ class ModelManager:
         if not self.backend_for(spec).available:
             return False
         return self.is_installed(model_id)
+
+    def ram_offload_mb(self, model_id: str) -> float:
+        """RAM the model needs beyond the GPU when it has the whole VRAM budget (MoE experts / layers on the CPU)."""
+        spec = self.catalog.get(model_id)
+        if spec.kind not in LLM_KINDS or not self.governor.state.has_gpu:
+            return 0.0
+        try:
+            plan = self.make_plan(model_id, self.governor.state.vram_budget_mb)
+        except Exception:  # noqa: BLE001
+            return 0.0
+        if plan is None:
+            return float("inf")
+        return float(plan.est_ram_mb) if plan.gpu else float("inf")
+
+    def too_heavy(self, model_id: str) -> bool:
+        """Would spill more than models.max_ram_offload_gb into system RAM: runs, but makes the whole PC sluggish
+        (the 30B MoE on a 12GB GPU). Auto-selection prefers lighter rungs; 0 disables the limit."""
+        limit = float(self.settings.models.max_ram_offload_gb or 0)
+        return limit > 0 and self.ram_offload_mb(model_id) > limit * 1024
+
+    def recently_failed(self, model_id: str, window: float = 1800.0) -> bool:
+        """Failed to load a moment ago: prefer the next rung of the ladder instead of failing again."""
+        rt = self.runtimes.get(model_id)
+        return bool(rt and rt.state == ERROR and time.time() - rt.failed_at < window)
 
     def usable_models(self, kinds: tuple[str, ...] | None = None) -> list[ModelSpec]:
         return [s for mid, s in self.catalog.models.items() if (kinds is None or s.kind in kinds) and self.usable(mid)]
@@ -256,7 +302,12 @@ class ModelManager:
             except BaseException as e:
                 rt.state, rt.plan, rt.instance = ERROR, None, None
                 rt.error = str(e)[:500]
+                rt.failed_at = time.time()
                 log.error("load %s failed: %s", model_id, e)
+                if isinstance(e, BackendError) and _arch_unsupported(str(e)):
+                    # a newer model family than this llama.cpp build knows: the platform updates llama.cpp
+                    log.warning("%s needs a newer llama.cpp build", model_id)
+                    self.llama_update_wanted.add(model_id)
                 if isinstance(e, BackendError):
                     raise ModelUnavailable(str(e)) from e
                 raise

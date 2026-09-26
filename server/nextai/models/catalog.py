@@ -38,6 +38,7 @@ class ModelSpec:
     vram_mb: int | None = None
     args: list[str] = field(default_factory=list)
     optional_args: list[str] = field(default_factory=list)
+    ladder: dict[str, Any] = field(default_factory=dict)  # {"family": "general", "tier": 30}: rung in a size ladder
     custom: bool = False
 
     def cap(self, name: str) -> float:
@@ -57,7 +58,7 @@ class ModelSpec:
             "roles": self.roles, "license": self.license, "storage_group": self.storage_group,
             "size_gb": self.size_gb, "arch": self.arch, "capabilities": self.capabilities, "speed": self.speed,
             "ctx_max": self.ctx_max, "defaults": self.defaults, "reasoning_control": self.reasoning_control,
-            "vram_mb": self.vram_mb, "custom": self.custom,
+            "vram_mb": self.vram_mb, "custom": self.custom, "ladder": self.ladder,
             "components": {k: [s.__dict__ for s in v] for k, v in self.components.items()},
         }
 
@@ -81,7 +82,8 @@ def parse_spec(d: dict[str, Any], custom: bool = False) -> ModelSpec:
         capabilities={k: float(v) for k, v in d.get("capabilities", {}).items()}, speed=float(d.get("speed", 0.5)),
         ctx_max=int(d.get("ctx_max", 8192)), defaults=dict(d.get("defaults", {})),
         reasoning_control=d.get("reasoning_control", "none"), vram_mb=d.get("vram_mb"),
-        args=list(d.get("args", [])), optional_args=list(d.get("optional_args", [])), custom=custom)
+        args=list(d.get("args", [])), optional_args=list(d.get("optional_args", [])),
+        ladder=dict(d.get("ladder", {})), custom=custom)
 
 
 class Catalog:
