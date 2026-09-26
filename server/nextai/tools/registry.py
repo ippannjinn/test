@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -145,6 +146,9 @@ class DownloadFile(Tool):
         if ctx.workspace is None:
             return ToolResult(False, "ワークスペースがありません")
         url = str(args.get("url", ""))
+        host = (urlsplit(url).hostname or "").lower()
+        if any(host == h or host.endswith("." + h) for h in STREAMING_HOSTS):
+            return ToolResult(False, STREAMING_NOTE)
         limit = int(ctx.platform.settings.web.max_download_mb) * 2**20
         try:
             res = await ctx.platform.web.fetch(url, max_bytes=limit + 1)
@@ -154,6 +158,9 @@ class DownloadFile(Tool):
             return ToolResult(False, f"HTTP {res.status}")
         if len(res.body) > limit:
             return ToolResult(False, f"ファイルが大きすぎます (上限 {limit // 2**20}MB)")
+        if "text/html" in (res.content_type or "").lower() and not str(args.get("save_as") or "").endswith((".html", ".htm")):
+            return ToolResult(False, "この URL はファイルではなく Web ページでした。ページの内容が必要なら web_fetch を使ってください。"
+                                     "動画・音声ファイルを変換したい場合は、ファイルそのものの URL か、利用者にファイルをアップロードしてもらってください。")
         name = str(args.get("save_as") or "") or "downloads/" + (_url_name(res.url) or "download.bin")
         p = _ws_path(ctx, name)
         ctx.platform.files.check_quota(ctx.user, len(res.body))
@@ -162,6 +169,17 @@ class DownloadFile(Tool):
         rel = p.relative_to(ctx.workspace).as_posix()
         return ToolResult(True, f"saved /workspace/{rel} ({len(res.body)} bytes, {res.content_type or 'unknown type'})",
                           {"path": rel})
+
+
+# Streaming services: downloading their media is against their terms (and usually copies copyrighted works),
+# so NextAI doesn't rip from them - the model explains this instead of failing silently.
+STREAMING_HOSTS = ("youtube.com", "youtu.be", "youtube-nocookie.com", "nicovideo.jp", "nico.ms", "tiktok.com",
+                   "spotify.com", "soundcloud.com", "netflix.com", "abema.tv", "tver.jp", "twitch.tv", "bilibili.com",
+                   "instagram.com", "x.com", "twitter.com", "music.apple.com", "amazon.co.jp", "primevideo.com")
+STREAMING_NOTE = ("このサイトは動画・音楽の配信サービスです。配信サービスからのダウンロードや音声の抜き出しは各サービスの利用規約で"
+                  "禁止されており、著作権の問題もあるため NextAI では行いません。利用者に次を伝えてください: "
+                  "(1) 自分で権利を持つ動画なら、そのファイルをアップロードしてもらえれば mp3 などに変換できる、"
+                  "(2) サービス公式のダウンロード / オフライン機能を使う、(3) 内容の要約や説明なら Web で調べて答えられる。")
 
 
 def _url_name(url: str) -> str:

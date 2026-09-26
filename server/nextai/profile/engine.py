@@ -180,7 +180,9 @@ class ProfileEngine:
             tools.append("memory_search")
         if a.memory_op or t >= 0.6:
             tools.append("memory_save")
-        if sandbox and ("run_code" in tools or a.needs_files or a.needs_web):
+        if sandbox and a.needs_convert:
+            tools += EXT_TOOLS + (["download_file"] if a.urls and web else [])
+        if sandbox and ("run_code" in tools or a.needs_files or a.needs_web or a.needs_convert):
             # the per-conversation sandbox workspace: uploads, downloaded data and code outputs live there
             tools += ["list_workspace", "read_workspace", "write_file", "share_file"] + EXT_TOOLS
             if a.needs_web and self.web_enabled_fn():

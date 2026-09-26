@@ -24,6 +24,7 @@
 | 外部公開 (Tailscale Funnel) | Funnel はループバック専用の `server.tunnel_port` にだけ転送。そのポートへのリクエストは常にリモート扱い (管理 API・管理アプリのログイン拒否、プロキシヘッダがあっても localhost 扱いにしない)、接続元 IP は Tailscale が付与した X-Forwarded-For の末尾を使用、Origin は公開 URL のホストのみ追加で許可 | `app.py`, `auth/deps.py`, `cli.py` |
 | アカウント削除 | 完全削除で会話・メッセージ・長期メモリ・カスタム指示・ファイル・サンドボックス作業ディレクトリ・APIキー・セッション・端末を削除。SQLite は secure_delete + WAL チェックポイントで削除済みデータを上書き。メモリ上のジョブ記録・プレビューも破棄。消せなかったフォルダは定期処理で再削除。監査ログとバックアップ ZIP は残る | `platform.purge_user`, `service.mark_deleted` |
 | 外部ツール (ffmpeg / pandoc) | 初回利用時に公式 GitHub リリースから取得し SHA-256 (asset digest) で検証、アーカイブのパス逸脱・シンボリックリンクは展開しない。実行はシェルなし・NextAI が組み立てた引数のみ・サンドボックス作業ディレクトリ内のファイルのみ・タイムアウト・低優先度・最小限の環境変数。ffmpeg は `-protocol_whitelist file`、pandoc は `--sandbox` でネットワークや他ファイルを読まない。管理者は自動取得の停止・ツールごとの許可を設定可能 | `services/extools.py`, `tools/registry.py` |
+| 配信サービスからのダウンロード | YouTube・ニコニコ・TikTok・Spotify などからのダウンロード / 音声抜き出しは利用規約と著作権の理由で行わない (download_file が拒否し、AI は理由と代替手段を案内) | `tools/registry.py` |
 | ツールの許可リスト | モデルが出力したツール名でも、そのターンに提示したツール以外は実行しない | `runners/agent.py` |
 | 監査 | ログイン成功・失敗、アカウント操作、端末の登録・解除・再利用の検知、設定変更、バックアップ・復元、モデル操作を `audit_log` に記録 | `audit.py` |
 

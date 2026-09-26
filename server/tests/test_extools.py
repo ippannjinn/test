@@ -94,3 +94,31 @@ def test_tools_respect_admin_settings(client, platform, monkeypatch, tmp_path):
     platform.settings.load_overrides({"tools.auto_install": True, "tools.allowed": ["ffmpeg"]})
     conv, job, msg = _send(client, conv, "変換して " + _tool("convert_document", input="a.md", output="a.html"))
     assert "許可されていません" in msg["content"]
+
+
+def test_conversion_requests_unlock_tools_and_streaming_sites_are_refused(client, platform, monkeypatch):
+    from nextai.profile.analyzer import analyze
+
+    a = analyze("この動画をmp3にして")
+    prof = platform.profiles.decide(a)
+    assert a.needs_convert and "convert_media" in prof.tools and prof.use_agent
+    b = analyze("https://example.com/files/talk.mp4 これを音声だけにして")
+    assert "download_file" in platform.profiles.decide(b).tools
+    assert analyze("このMarkdownをWordに変換して").needs_convert
+    assert not analyze("今日の天気は？").needs_convert
+    # YouTube: the download tool refuses with an explanation instead of fetching
+    create_member(platform, "ytuser")
+    web_login(client, "ytuser")
+    conv, job, msg = _send(client, "new", "https://youtu.be/abc これをmp3にして " + _tool("download_file", url="https://youtu.be/abc"))
+    assert job["status"] == "done" and "利用規約" in msg["content"]
+
+
+def test_convert_fallback_when_model_skips_tool(client, platform, monkeypatch, tmp_path):
+    _fake_releases(monkeypatch, tmp_path)
+    create_member(platform, "lazy")
+    web_login(client, "lazy")
+    up = client.post("/api/files", files={"file": ("rec.mov", b"MOV", "video/quicktime")}).json()["file"]
+    r = client.post("/api/conversations/new/messages", json={"content": "この動画をmp3にして", "attachments": [up["id"]]}).json()
+    job = wait_job(client, r["job"]["id"], timeout=30)
+    msg = client.get(f"/api/conversations/{r['conversation_id']}").json()["messages"][-1]
+    assert job["status"] == "done" and [a["name"] for a in msg["meta"]["assets"]] == ["rec.mp3"]

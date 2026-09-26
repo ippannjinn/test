@@ -28,6 +28,10 @@ R_CODE = _rx(r"```|コード|プログラム|関数|メソッド|クラス|実�
 R_WEB = _rx(r"最新|今日|今週|現在の|ニュース|検索して|調べて|ググって|ウェブ|ネットで|価格|相場|天気|株価|為替|発売日|リリース"
             r"|\b(latest|news|search|look up|google|current|today|price|weather|release)\b")
 R_URL = _rx(r"https?://[^\s<>\"']+")
+# format conversion / editing of media and documents (ffmpeg / pandoc tools in the sandbox workspace)
+R_CONVERT = _rx(r"(mp3|mp4|m4a|wav|ogg|flac|gif|webm|mov|avi|docx|word|ワード|markdown|マークダウン|html|epub|odt)"
+                r"\s*(形式)?\s*(に|へ|で)?\s*(変換|して|にして|で保存|で出力|化)|変換して|コンバート|音声(だけ|のみ)|音声を?(抜き|取り)出"
+                r"|切り出して|トリミング|圧縮して|エンコード|書き出して|\b(convert|extract audio|to mp3|to mp4)\b")
 R_REASON = _rx(r"証明|計算|数学|論理|推論|なぜ|理由|比較|分析|戦略|最適|設計|検討|評価|考察|トレードオフ|アルゴリズム"
                r"|\b(prove|calculate|math|analy[sz]e|compare|why|strategy|optimi[sz]e|design|evaluate|trade-?off)\b")
 R_TRANSLATE = _rx(r"翻訳|英訳|和訳|英語に|日本語に|\btranslate\b")
@@ -65,6 +69,7 @@ class TaskAnalysis:
     text: str = ""
     deep_research: bool = False
     autonomous: bool = False
+    needs_convert: bool = False
 
     @property
     def capability(self) -> str:
@@ -108,6 +113,7 @@ def analyze(text: str, *, attachments: list[dict] | None = None, history_turns: 
     a.needs_vision = bool(images)
     a.needs_files = bool(docs)
     a.memory_op = bool(R_MEMORY.search(raw))
+    a.needs_convert = bool(R_CONVERT.search(raw))
     if a.explicit_mode == "auto":
         if R_QUALITY.search(raw):
             a.explicit_mode = "quality"

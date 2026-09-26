@@ -9,6 +9,7 @@ import logging
 import re
 import shutil
 import zipfile
+from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -120,6 +121,8 @@ WORKSPACE_RULES = """サンドボックス (隔離環境) の作業ディレク�
 - 利用者の添付ファイルは uploads/ に置かれています。Web上のデータは download_file で downloads/ に、調べたページは web_fetch の save_as で research/ に保存してから run_code で処理できます。
 - run_code で作ったグラフ・表・文書 (png, svg, csv, xlsx, pdf, html, md など) は自動で利用者に表示されます。それ以外を渡すときは share_file を使ってください。
 - 動画・音声の変換/切り出しは convert_media (ffmpeg)、文書形式の変換 (Markdown⇔Word など) は convert_document (pandoc) を使えます。必要なツールは初回に自動でダウンロードされます。
+- 変換の依頼には必ずツールを使って実際にファイルを作ってください。添付ファイルは uploads/ にあります。ファイルそのものの URL なら download_file で取得してから変換します。
+- YouTube などの配信サービスからのダウンロード・音声抜き出しは利用規約と著作権の理由で行いません。その場合は理由と代わりの方法 (自分のファイルのアップロード、公式のオフライン機能) を短く伝えてください。
 - ファイルは会話が続く限り残ります。
 現在のファイル:
 {listing}"""
@@ -143,6 +146,35 @@ RESEARCH_RULES = """Deep Research モードです。十分に調べてから、�
 2. 数値データや表は download_file / web_fetch(save_as) でワークスペースに保存し、必要なら run_code で集計・グラフ化する。
 3. 情報源どうしが食い違う点、確認できなかった点は明記する。推測と事実を区別する。
 4. 最終回答は「要約」→ 見出し付きの本文 → 「参考資料」(番号付きで タイトル と URL) の構成にし、本文中で [1] のように出典番号を付ける。"""
+
+
+_TARGET = re.compile(r"(mp3|mp4|m4a|wav|ogg|flac|gif|webm|docx|word|ワード|markdown|マークダウン|md|html|epub|odt)", re.I)
+_ALIAS = {"word": "docx", "ワード": "docx", "markdown": "md", "マークダウン": "md"}
+
+
+async def _convert_fallback(p: Any, job: Job, ctx: Any, text: str, attachments: list[dict]) -> None:
+    """Clear request ("この動画をmp3にして" + one attachment) but the model didn't call a converter: do it directly."""
+    m = _TARGET.findall(text)
+    if not m or len(attachments) != 1:
+        return
+    target = _ALIAS.get(m[-1].lower(), m[-1].lower())
+    src = attachments[0]
+    name = re.sub(r"[^\w.\- ]", "_", src["name"]).strip(" .")[:120] or src["id"]
+    tool = "convert_document" if target in ("docx", "md", "html", "epub", "odt") else "convert_media"
+    if tool == "convert_media" and not src["mime"].startswith(("video/", "audio/")):
+        return
+    out = f"{Path(name).stem}.{target}"
+    job.emit("notice", message="モデルが変換ツールを呼ばなかったため、直接変換します")
+    job.emit("tool_call", id="convert-fallback", name=tool, args=f"uploads/{name} -> {out}")
+    res = await registry.execute(ctx, tool, {"input": f"uploads/{name}", "output": out}, job.emit)
+    job.emit("tool_result", id="convert-fallback", name=tool, ok=res.ok, summary=res.content[:400])
+
+
+def _is_streaming(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(url).hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in registry.STREAMING_HOSTS)
 
 
 def ctx_research(ctx: Any) -> list[dict]:
@@ -249,6 +281,9 @@ async def run_chat(p: Any, job: Job) -> dict:
             sys_parts.append("利用者について記憶している情報:\n" + "\n".join(f"- {m['content']}" for m in mems))
             used_memories = [m["content"][:120] for m in mems]
             job.emit("memory_used", items=used_memories)
+    streaming = [u for u in analysis.urls if _is_streaming(u)]
+    if streaming and (analysis.needs_convert or analysis.is_media or re.search(r"ダウンロード|保存|落として|download", analysis.text)):
+        sys_parts.append("注意: " + registry.STREAMING_NOTE)
     if analysis.deep_research:
         sys_parts.append(RESEARCH_RULES)
     elif analysis.autonomous:
@@ -313,6 +348,12 @@ async def run_chat(p: Any, job: Job) -> dict:
                 extra = f"{label}を生成しました。"
                 text = (text.rstrip() + "\n\n" + extra) if text.strip() else extra
                 job.emit("delta", text=("\n\n" if text != extra else "") + extra)
+        if analysis.needs_convert and not ctx.assets and ws is not None and attachments:
+            await _convert_fallback(p, job, ctx, analysis.text, attachments)
+            if ctx.assets:
+                extra = "変換したファイルを用意しました。"
+                text = (text.rstrip() + "\n\n" + extra) if text.strip() else extra
+                job.emit("delta", text="\n\n" + extra)
         if analysis.task_type == "video_gen" and ctx.assets:
             note = "\n\n> ローカルGPUでの短尺・低解像度生成です (クラウドの動画生成サービスとは品質・尺が異なります)。"
             text += note
