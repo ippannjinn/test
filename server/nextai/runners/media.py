@@ -42,7 +42,7 @@ async def refine_prompt(p: Any, job: Job, user: dict, profile: Profile, kind: st
     if not llms:
         return prompt
     fast = next((s for s in llms if "fast" in s.roles), llms[0])
-    helper = Profile(task_type="writing", tuning=0.1, label="Speed", complexity=0.1, model_id=fast.id,
+    helper = Profile(task_type="writing", tuning=0.1, label="速度特化", complexity=0.1, model_id=fast.id,
                      max_tokens=200, temperature=0.4, priority_class="interactive")
     try:
         res = await llm_call(p, job, user, helper, [{"role": "system", "content": REFINE_PROMPT.format(kind=kind)},

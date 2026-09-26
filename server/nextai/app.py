@@ -87,6 +87,9 @@ class SecurityMiddleware:
                     add.append((b"strict-transport-security", b"max-age=31536000"))
                 if is_api and b"cache-control" not in existing:
                     add.append((b"cache-control", b"no-store"))
+                elif not is_api and b"cache-control" not in existing:
+                    # web UI files: always revalidate (ETag) so an update is picked up without a hard reload
+                    add.append((b"cache-control", b"no-cache"))
                 message = {**message, "headers": h + [x for x in add if x[0] not in existing]}
             await send(message)
 

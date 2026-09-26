@@ -46,7 +46,7 @@ def test_analyzer_task_types(text, task):
 def test_greeting_is_speed_and_uses_fast_model(engine):
     eng, *_ = engine
     p = eng.decide(analyze("こんにちは"))
-    assert p.label == "Speed" and p.model_id == "qwen3-4b-instruct" and not p.use_agent
+    assert p.label == "速度特化" and p.model_id == "qwen3-4b-instruct" and not p.use_agent
     assert p.priority_class == "interactive"
 
 
@@ -73,7 +73,7 @@ def test_congestion_shifts_toward_speed_unless_quality_pinned(engine):
 
 def test_continuous_labels():
     assert [tuning_label(t) for t in (0.1, 0.3, 0.5, 0.7, 0.9)] == [
-        "Speed", "Speed寄りBalanced", "Balanced", "Balanced寄りAutonomous", "Autonomous"]
+        "速度特化", "速度特化", "精度特化", "精度特化", "自律特化"]
 
 
 def test_policy_interpolation(engine):

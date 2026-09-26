@@ -251,7 +251,7 @@ namespace NextAI.Admin
 
         static readonly (string id, string text)[] Sections =
         {
-            ("profile", "Dynamic Profile (Speed / Balanced / Autonomous の内部チューニング)"),
+            ("profile", "Dynamic Profile (速度特化 / 精度特化 / 自律特化 の内部チューニング)"),
             ("scheduler", "GPUスケジューラ / キュー"), ("resources", "リソース管理 (VRAM/RAM/温度/ストレージ)"), ("models", "モデル / キャッシュ"),
             ("sandbox", "コードサンドボックス"), ("web", "Web検索 / ブラウジング"), ("generation", "画像・動画・音楽の生成制限"),
             ("api", "OpenAI互換API / メンバーのAPIキー"),
@@ -260,7 +260,7 @@ namespace NextAI.Admin
 
         static readonly string[] Help =
         {
-            "Speed / Balanced / Autonomous は固定プロファイルではなく連続値 t (0〜1) の基準点です。各リクエストは t を自動決定し、上限値をこの表の間で補間します。混雑時は congestion_shift だけ Speed 寄りに、余裕があれば idle_boost だけ Autonomous 寄りに動きます。品質指定のリクエストは下げずに待機します。",
+            "速度特化 (speed) / 精度特化 (balanced) / 自律特化 (autonomous) の各値は、連続値 t (0〜1) の基準点です。利用者が選んだモードの範囲内で t を自動決定し、上限値をこの表の間で補間します。混雑時は congestion_shift だけ速度寄りに、余裕があれば idle_boost だけ上げます。精度特化・自律特化は混雑しても下げずに待機します。",
             "aging_per_second: 待ち時間1秒あたりの加点 (飢餓防止)。max_wait_force_seconds を超えたジョブは最優先で実行されます。fair_share_*: 直近のGPU利用時間が多いユーザーほど後回し。swap_patience_seconds: ロード済みモデルの仕事がある間、スワップを待つ時間。",
             "vram_reserve_mb: Windows/他アプリ用に常に空けるVRAM。host_friendly: ゲーム等が使うVRAMを予算から除外。ram_*_mb: 空きRAMがこの値を下回ると段階的に負荷を下げます。disk_margin_gb: 常に確保するディスク空き容量。",
             "kv_cache_type: KVキャッシュ量子化 (q8_0推奨)。cache_reuse: プレフィックスキャッシュ再利用。idle_unload_seconds: 未使用モデルを解放するまでの時間。prefetch: 次に使うモデルをRAMへ先読み (スラッシング時は自動停止)。",

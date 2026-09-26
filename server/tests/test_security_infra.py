@@ -287,3 +287,8 @@ def test_update_check_prefers_newest_of_api_and_cached_link(monkeypatch):
     monkeypatch.setattr(adm.httpx, "AsyncClient", client)
     m = asyncio.run(adm._latest_manifest("https://github.com/o/r/releases/latest/download/update-manifest.json"))
     assert m["version"] == "1.8.0"
+
+
+def test_web_ui_files_revalidate(client):
+    r = client.get("/app.js")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"

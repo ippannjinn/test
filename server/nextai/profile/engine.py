@@ -1,6 +1,6 @@
 """Dynamic Profile Engine.
 
-Every request passes through here. Speed / Balanced / Autonomous are *tuning policies*, not
+Every request passes through here. 速度特化 / 精度特化 / 自律特化 (Speed / Balanced / Autonomous) are *tuning policies*, not
 fixed profiles: a continuous tuning value t ∈ [0, 1] interpolates between them, and is shifted by
 queue congestion, resource pressure and explicit user intent. The resulting profile decides the
 model, reasoning depth, context, token/time/step budgets, tools, parallelism and queue class, and
@@ -23,16 +23,18 @@ POLICY_KEYS = ("max_tokens", "ctx_tokens", "max_steps", "max_seconds", "max_tool
 MEDIA_KIND = {"image_gen": "image", "video_gen": "video", "music_gen": "music"}
 
 
+MODE_LABEL = {"fast": "速度特化", "quality": "精度特化", "autonomous": "自律特化"}
+
+
 def tuning_label(t: float) -> str:
-    if t < 0.2:
-        return "Speed"
-    if t < 0.4:
-        return "Speed寄りBalanced"
-    if t < 0.6:
-        return "Balanced"
-    if t < 0.8:
-        return "Balanced寄りAutonomous"
-    return "Autonomous"
+    """User-facing name of an internal tuning value (same names as the three response modes)."""
+    return "速度特化" if t < 0.4 else "精度特化" if t < 0.8 else "自律特化"
+
+
+def mode_label(a: TaskAnalysis, t: float) -> str:
+    if a.autonomous:
+        return MODE_LABEL["autonomous"]
+    return MODE_LABEL.get(a.explicit_mode) or tuning_label(t)
 
 
 @dataclass
@@ -121,7 +123,7 @@ class ProfileEngine:
                 t += p.idle_boost
                 reasons.append("GPUに余裕あり → 高性能寄りに調整")
         t = clamp(t, 0.0, 1.0)
-        prof = Profile(task_type=a.task_type, tuning=round(t, 3), label=tuning_label(t), complexity=a.complexity,
+        prof = Profile(task_type=a.task_type, tuning=round(t, 3), label=mode_label(a, t), complexity=a.complexity,
                        model_id=None, quality_pinned=pinned, congestion=round(congestion, 3), pressure=gs.level.name,
                        reasons=reasons)
         self._apply_policy(prof, a)
@@ -328,7 +330,7 @@ class ProfileEngine:
                 keep = 6 if any(t.startswith("web_") for t in prof.tools) else 4
                 new.limits["max_steps"] = max(1, min(prof.limits.get("max_steps", 1), max(keep, prof.limits.get("max_steps", 1) // 2)))
                 new.tuning = max(0.0, prof.tuning - 0.2)
-                new.label = tuning_label(new.tuning)
+                new.label = prof.label.split(" ")[0] + " (軽量化)"
                 new.reasons.append("リソース逼迫のため途中で軽量化")
                 changed = True
                 if prof.model_id and self.manager.ram_heavy(prof.model_id):

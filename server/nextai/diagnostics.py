@@ -191,7 +191,7 @@ async def benchmarks(p: Any, job: Any, user: dict) -> list[Check]:
     general = next((s for s in llms if "general" in s.roles and s.id != fast.id), None)
 
     def prof(model_id: str) -> Profile:
-        return Profile(task_type="chat", tuning=0.1, label="Speed", complexity=0.1, model_id=model_id, max_tokens=160,
+        return Profile(task_type="chat", tuning=0.1, label="速度特化", complexity=0.1, model_id=model_id, max_tokens=160,
                        temperature=0.2, priority_class="batch")
 
     async def measure_load(spec) -> tuple[float, int, int]:
