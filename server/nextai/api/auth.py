@@ -130,6 +130,8 @@ def logout(body: LogoutBody, ctx: Annotated[Ctx, Depends(require_user)], respons
 @router.post("/password")
 def change_password(body: PasswordBody, ctx: Annotated[Ctx, Depends(require_user)], response: Response):
     p = ctx.p
+    if ctx.auth == "token":
+        raise ApiError(403, "token_forbidden", "APIトークンではパスワードを変更できません")
     try:
         p.auth.change_password(ctx.uid, body.current_password, body.new_password,
                                revoke_others=body.revoke_other_sessions, current_session_id=ctx.session["id"], ip=ctx.ip)

@@ -70,7 +70,19 @@ Cloudflare Tunnel などのリバースプロキシを使う場合の設定で�
 - SSRF 遮断
 - 監査ログ
 
-## 5. 更新・修復・アンインストール
+## 5. Claude によるデバッグ (Claude 専用アカウント)
+
+Claude Code をサーバーPC上で使うと、Claude が稼働中のサーバーを調査・UI操作できます。
+
+1. 管理コンソール →「メンバー」→「Claude用アカウント発行」(有効日数を指定)。
+   メンバー `claude` (ブラウザUI用) と APIトークンが発行され、接続情報が `%USERPROFILE%\.nextai\claude.env` に保存されます。
+2. このリポジトリを開いた Claude Code に「NextAI をデバッグして」等と依頼します (手順は `CLAUDE.md`)。
+3. トークンの権限: 一般API (チャット等) + 管理APIの**読み取りと診断実行のみ**。メンバー作成・設定変更・再起動などの変更操作は不可、localhost からのみ有効、期限付き、すべて監査ログに記録。
+4. 不要になったら「APIトークン」から失効、または `claude` アカウントを停止してください。再発行すると以前のパスワード・トークンは無効になります。
+
+CLI の場合 (管理者): `python -m nextai --data-dir C:\ProgramData\NextAI agent-account --days 7 --out %USERPROFILE%\.nextai\claude.env` / 失効は `--revoke`。
+
+## 6. 更新・修復・アンインストール
 
 - **更新 (ワンクリック)**: 管理コンソールは起動時と6時間ごとに GitHub Releases の `update-manifest.json` を確認し、新版があるとステータスバーに「⬆ vX.Y.Z に更新できます」と表示します。クリック (または「サーバー」→「アップデート確認 / 更新」) すると、新しいセットアップをダウンロード → SHA-256 検証 → `/update` モードで起動し、診断や設定画面なしで上書き更新します。会話・ファイル・設定・モデルは保持され、DB は自動移行、完了後に管理コンソールが再起動します。手動の場合は新しい EXE をそのまま実行しても同様に更新されます。更新確認先は「AI設定 → サーバー → server.update_manifest_url」で変更できます。
 - **修復・再開**: 同じ EXE を再実行するか、「アプリ」→ NextAI Platform →「変更」を選びます。完了済みの処理 (ダウンロード済みで検証済みのファイルなど) はスキップされます。
@@ -79,7 +91,7 @@ Cloudflare Tunnel などのリバースプロキシを使う場合の設定で�
   - アプリとモデル・ランタイムを削除
   - すべて削除 (「削除」の入力が必要)
 
-## 6. バックアップと復元
+## 7. バックアップと復元
 
 「サーバー」→「バックアップ作成」で、DB・設定・証明書・ユーザーデータを ZIP にまとめます。既定では7世代を保持します。
 
@@ -92,7 +104,7 @@ python -m nextai --data-dir C:\ProgramData\NextAI backup
 python -m nextai --data-dir C:\ProgramData\NextAI restore backup-YYYYmmdd-HHMMSS.zip
 ```
 
-## 7. トラブルシューティング
+## 8. トラブルシューティング
 
 | 症状 | 確認・対処 |
 |---|---|
@@ -105,7 +117,7 @@ python -m nextai --data-dir C:\ProgramData\NextAI restore backup-YYYYmmdd-HHMMSS
 | 診断で FAIL となりインストールできないが、状況を理解したうえで続行したい | `NextAI-Platform-Setup.exe /force` で起動すると、FAIL があっても続行できます (自己責任) |
 | 管理者のパスワードを忘れた | 管理者 PowerShell で `"<data>\runtime\venv\Scripts\python.exe" -m nextai --data-dir <data> reset-password --username <名前>` を実行します (`PYTHONPATH` に `C:\Program Files\NextAI\app\server` を設定) |
 
-## 8. 実機ベンチマーク (最初に必ず実行)
+## 9. 実機ベンチマーク (最初に必ず実行)
 
 管理コンソール →「サーバー」→「フル診断」を実行します。計測する項目は次のとおりです。
 

@@ -18,6 +18,7 @@
 | サービスアカウントの権限 | `NT SERVICE\NextAIServer` 仮想アカウントで実行 (LocalSystem は使わない) | `Installer.cs` |
 | サプライチェーン | Python 依存はハッシュ固定 (`--require-hashes`)、uv は PyPI の SHA-256 で検証、モデルは HF LFS の SHA-256 で検証、GitHub リリースは digest がある場合に検証 | `requirements.lock`, `downloader.py` |
 | プロンプトインジェクション | ツールの結果を外部データとして囲み、システムプロンプトでその中の指示に従わないよう明示 | `runners/chat.py`, `agent.py` |
+| 自動化トークン (Claude 等) | `nxt_` 付きランダムトークンをハッシュのみ保存、スコープ (member / debug)、debug は管理APIの読み取りと診断実行のみ、localhost 限定、期限付き、再発行で旧トークン失効、アカウント停止・パスワードリセットで失効 | `auth/deps.py`, `service.py` |
 | 監査 | ログイン成功・失敗、アカウント操作、端末の登録・解除・再利用の検知、設定変更、バックアップ・復元、モデル操作を `audit_log` に記録 | `audit.py` |
 
 ## 既知の制限

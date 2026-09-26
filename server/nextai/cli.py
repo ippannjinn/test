@@ -160,6 +160,36 @@ def cmd_reset_password(args) -> int:
     return 0
 
 
+def cmd_agent_account(args) -> int:
+    from .api.admin import agent_env
+    from .auth.service import AuthError
+
+    s = _settings(args)
+    auth = _auth(s)
+    if args.revoke:
+        u = auth.get_user_by_name("claude")
+        n = auth.revoke_user_tokens(u["id"], "cli_revoked") if u else 0
+        _emit_json({"revoked": n})
+        return 0
+    try:
+        res = auth.ensure_agent_account(days=args.days, debug=not args.no_debug, actor=None, ip="cli")
+    except AuthError as e:
+        print(f"error: {e.message}", file=sys.stderr)
+        return 1
+
+    class _P:
+        settings = s
+
+    env = agent_env(_P, res)
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(env, encoding="utf-8")
+        _emit_json({"ok": True, "written": args.out, "expires_at": res["expires_at"], "scopes": res["scopes"]})
+    else:
+        print(env)
+    return 0
+
+
 def cmd_migrate(args) -> int:
     from .db import Database
 
@@ -326,6 +356,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--must-change", action="store_true")
     p.add_argument("--activate", action="store_true")
     p.set_defaults(fn=cmd_reset_password)
+
+    p = sub.add_parser("agent-account", help="Claude 専用アカウント (UI用メンバー + デバッグ用APIトークン) を発行/再発行")
+    p.add_argument("--days", type=float, default=7)
+    p.add_argument("--no-debug", action="store_true", help="管理APIの読み取り権限を付けない")
+    p.add_argument("--out", help="接続情報 (.env) の書き出し先")
+    p.add_argument("--revoke", action="store_true", help="Claude のトークンをすべて失効")
+    p.set_defaults(fn=cmd_agent_account)
 
     sub.add_parser("migrate").set_defaults(fn=cmd_migrate)
     sub.add_parser("hw-detect").set_defaults(fn=cmd_hw)

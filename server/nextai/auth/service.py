@@ -35,6 +35,7 @@ def public_user(u: dict[str, Any]) -> dict[str, Any]:
         "rate_limit_per_min": u["rate_limit_per_min"], "created_at": u["created_at"],
         "last_login_at": u["last_login_at"], "password_changed_at": u["password_changed_at"],
         "disabled_at": u["disabled_at"], "purge_after": u["purge_after"],
+        "is_agent": bool(u.get("is_agent", 0)),
     }
 
 
@@ -169,6 +170,7 @@ class AuthService:
         if state != "active":
             self.revoke_user_sessions(user_id, f"account_{state}")
             self.revoke_user_devices(user_id, f"account_{state}")
+            self.revoke_user_tokens(user_id, f"account_{state}")
         self.audit.record(f"user.state.{state}", actor=actor, target=user["username"], ip=ip)
         return self.get_user(user_id)
 
@@ -179,7 +181,7 @@ class AuthService:
             raise AuthError("not_found", "ユーザーが見つかりません", 404)
         ts = now()
         with self.db.tx() as c:
-            for table in ("sessions", "devices", "conversations", "files", "memories", "jobs", "usage_daily"):
+            for table in ("sessions", "devices", "api_tokens", "conversations", "files", "memories", "jobs", "usage_daily"):
                 c.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
             c.execute("UPDATE users SET state='deleted', username=?, display_name='(deleted)', password_hash='!',"
                       " bio='', ui_prefs='{}', avatar_file=NULL, updated_at=?, purge_after=NULL WHERE id=?",
@@ -415,8 +417,85 @@ class AuthService:
         self.db.execute("DELETE FROM login_failures WHERE key LIKE ?", (f"u:{user['username'].lower()}%",))
         self.revoke_user_sessions(user_id, "password_reset")
         self.revoke_user_devices(user_id, "password_reset")
+        self.revoke_user_tokens(user_id, "password_reset")
         self.audit.record("user.password_reset", actor=actor, target=user["username"], ip=ip)
         return pw
+
+    # ------------------------------------------------------------------ API tokens (automation / Claude)
+    def issue_api_token(self, user: dict, *, scopes: list[str], days: float, name: str,
+                        actor: dict | None, ip: str | None) -> tuple[str, dict]:
+        bad = [x for x in scopes if x not in TOKEN_SCOPES]
+        if bad or not scopes:
+            raise AuthError("invalid_scope", f"スコープが不正です: {bad or scopes}", 400)
+        if not 0 < days <= 90:
+            raise AuthError("invalid_value", "有効期限は1〜90日で指定してください", 400)
+        token, tid, ts = API_TOKEN_PREFIX + new_token(32), new_id(), now()
+        self.db.execute(
+            "INSERT INTO api_tokens(id, user_id, name, token_hash, scopes, created_at, created_by, expires_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (tid, user["id"], name[:60], hash_token(token), ",".join(scopes), ts,
+             actor["username"] if actor else "cli", ts + days * 86400))
+        self.audit.record("token.issue", actor=actor, target=user["username"], ip=ip, token_id=tid, scopes=scopes,
+                          days=days)
+        return token, self.db.one("SELECT * FROM api_tokens WHERE id=?", (tid,))
+
+    def resolve_api_token(self, token: str, ip: str | None = None) -> tuple[dict, dict] | None:
+        if not token.startswith(API_TOKEN_PREFIX) or len(token) > 200:
+            return None
+        row = self.db.one("SELECT * FROM api_tokens WHERE token_hash=?", (hash_token(token),))
+        ts = now()
+        if not row or row["revoked_at"] or row["expires_at"] < ts:
+            return None
+        user = self.get_user(row["user_id"])
+        if not user or user["state"] != "active":
+            return None
+        if not row["last_used_at"] or ts - row["last_used_at"] > 60:
+            self.db.execute("UPDATE api_tokens SET last_used_at=?, last_ip=? WHERE id=?", (ts, ip, row["id"]))
+        row["scopes"] = row["scopes"].split(",")
+        return user, row
+
+    def list_api_tokens(self) -> list[dict]:
+        ts = now()
+        rows = self.db.query("SELECT t.id, t.name, t.scopes, t.created_at, t.created_by, t.expires_at, t.last_used_at,"
+                             " t.last_ip, t.revoked_at, t.revoke_reason, u.username FROM api_tokens t"
+                             " JOIN users u ON u.id=t.user_id ORDER BY t.created_at DESC")
+        for r in rows:
+            r["scopes"] = r["scopes"].split(",")
+            r["status"] = "revoked" if r["revoked_at"] else "expired" if r["expires_at"] < ts else "active"
+        return rows
+
+    def revoke_api_token(self, token_id: str, reason: str, *, actor: dict | None = None, ip: str | None = None) -> bool:
+        ok = self.db.execute("UPDATE api_tokens SET revoked_at=?, revoke_reason=? WHERE id=? AND revoked_at IS NULL",
+                             (now(), reason, token_id)).rowcount > 0
+        if ok:
+            self.audit.record("token.revoke", actor=actor, target=token_id, ip=ip, reason=reason)
+        return ok
+
+    def revoke_user_tokens(self, user_id: str, reason: str) -> int:
+        return self.db.execute("UPDATE api_tokens SET revoked_at=?, revoke_reason=? WHERE user_id=? AND revoked_at IS NULL",
+                               (now(), reason, user_id)).rowcount
+
+    def ensure_agent_account(self, *, days: float, debug: bool, actor: dict | None, ip: str | None) -> dict:
+        """Create (or rotate) the dedicated Claude account: a member for UI work + a scoped, expiring API token.
+        Re-issuing always rotates the password and revokes every previous token of the account."""
+        user = self.get_user_by_name(AGENT_USERNAME)
+        if user is None:
+            user, password = self.create_user(username=AGENT_USERNAME, password=None, role="member",
+                                              display_name="Claude (AIデバッグ)", must_change_password=False,
+                                              actor=actor, ip=ip, bio="Claude Code によるデバッグ・UI検証用の専用アカウント")
+        else:
+            if user["role"] != "member":
+                raise AuthError("agent_conflict", "ユーザー名 claude が管理者として既に使われています", 409)
+            if user["state"] != "active":
+                self.set_state(user["id"], "active", actor=actor, ip=ip)
+            password = self.reset_password(user["id"], None, must_change=False, actor=actor, ip=ip)
+        self.db.execute("UPDATE users SET is_agent=1 WHERE id=?", (user["id"],))
+        self.revoke_user_tokens(user["id"], "rotated")
+        scopes = ["member", "debug"] if debug else ["member"]
+        token, row = self.issue_api_token(self.get_user(user["id"]), scopes=scopes, days=days, name="Claude Code",
+                                          actor=actor, ip=ip)
+        return {"username": AGENT_USERNAME, "password": password, "token": token, "token_id": row["id"],
+                "scopes": scopes, "expires_at": row["expires_at"]}
 
     def cleanup(self) -> dict[str, int]:
         ts = now()
@@ -431,6 +510,11 @@ class AuthService:
     def users_due_for_purge(self) -> list[dict]:
         return self.db.query("SELECT * FROM users WHERE state='disabled' AND purge_after IS NOT NULL AND purge_after < ?",
                              (now(),))
+
+
+API_TOKEN_PREFIX = "nxt_"
+TOKEN_SCOPES = ("member", "debug")
+AGENT_USERNAME = "claude"
 
 
 def _device_name_from_ua(ua: str | None) -> str:

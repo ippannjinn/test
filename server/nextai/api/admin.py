@@ -280,6 +280,54 @@ def user_invitation(user_id: str, ctx: Admin):
     return {"invitation": invitation_text(ctx.p, _get_user(ctx.p, user_id), None)}
 
 
+class AgentBody(BaseModel):
+    days: float = Field(default=7, gt=0, le=90)
+    debug: bool = True
+
+
+def agent_env(p, res: dict) -> str:
+    s = p.settings.server
+    return "\n".join([
+        "# NextAI Platform - Claude 専用アカウント (Claude Code 用)",
+        "# このファイルは秘密情報です。共有・コミットしないでください。",
+        f"NEXTAI_URL={'https' if s.tls else 'http'}://127.0.0.1:{s.port}",
+        "NEXTAI_CA=C:\\Program Files\\NextAI\\ca.crt",
+        f"NEXTAI_TOKEN={res['token']}",
+        f"NEXTAI_TOKEN_SCOPES={','.join(res['scopes'])}",
+        f"NEXTAI_UI_USER={res['username']}",
+        f"NEXTAI_UI_PASSWORD={res['password']}",
+        f"NEXTAI_TOKEN_EXPIRES={iso_date(res['expires_at'])}",
+        "",
+    ])
+
+
+def iso_date(ts: float) -> str:
+    import datetime as _dt
+
+    return _dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+@router.post("/agent-account")
+def create_agent_account(body: AgentBody, ctx: Admin):
+    try:
+        res = ctx.p.auth.ensure_agent_account(days=body.days, debug=body.debug, actor=ctx.user, ip=ctx.ip)
+    except AuthError as e:
+        raise _ae(e)
+    return {**res, "env": agent_env(ctx.p, res)}
+
+
+@router.get("/tokens")
+def list_tokens(ctx: Admin):
+    return {"tokens": ctx.p.auth.list_api_tokens()}
+
+
+@router.delete("/tokens/{token_id}")
+def revoke_token(token_id: str, ctx: Admin):
+    if not ctx.p.auth.revoke_api_token(token_id, "admin_revoked", actor=ctx.user, ip=ctx.ip):
+        raise ApiError(404, "not_found", "有効なトークンが見つかりません")
+    return {"ok": True}
+
+
 @router.post("/sessions/revoke-all")
 def revoke_all(ctx: Admin):
     n = ctx.p.auth.revoke_all_sessions("admin_revoked_all", except_session_id=ctx.session["id"])

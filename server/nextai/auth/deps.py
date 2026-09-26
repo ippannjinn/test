@@ -10,6 +10,8 @@ from fastapi import Request
 from ..security.tokens import safe_equal
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+# Admin-API calls a "debug"-scoped automation token may make: every read, plus running diagnostics.
+DEBUG_TOKEN_POSTS = {"/api/admin/diagnostics/run"}
 PASSWORD_GATE_ALLOWED = {"/api/auth/session", "/api/auth/password", "/api/auth/logout", "/api/account/profile"}
 
 
@@ -26,6 +28,7 @@ class Ctx:
     session: dict
     auth: str
     ip: str
+    scopes: tuple = ()
 
     @property
     def uid(self) -> str:
@@ -75,6 +78,14 @@ def _resolve(request: Request) -> Ctx | None:
         token, kind = request.cookies.get(cookie_names(p.settings)[0], ""), "cookie"
     if not token:
         return None
+    if kind == "bearer" and token.startswith("nxt_"):
+        ip = client_ip(request)
+        res = p.auth.resolve_api_token(token, ip)
+        if not res:
+            return None
+        user, tok = res
+        sess = {"id": f"token:{tok['id']}", "kind": "api_token", "csrf_token": "", "device_id": None, "user_agent": ""}
+        return Ctx(p, user, sess, "token", ip, tuple(tok["scopes"]))
     res = p.auth.resolve_session(token)
     if not res:
         return None
@@ -84,10 +95,12 @@ def _resolve(request: Request) -> Ctx | None:
     return Ctx(p, user, sess, kind, client_ip(request))
 
 
-def require_user(request: Request) -> Ctx:
+def require_user(request: Request, _admin: bool = False) -> Ctx:
     ctx = _resolve(request)
     if ctx is None:
         raise ApiError(401, "unauthenticated", "ログインが必要です")
+    if ctx.auth == "token" and not _admin and "member" not in ctx.scopes:
+        raise ApiError(403, "token_scope", "このトークンには一般APIの権限がありません")
     if ctx.auth == "cookie" and request.method not in SAFE_METHODS:
         sent = request.headers.get("x-csrf-token", "")
         if not sent or not safe_equal(sent, ctx.session["csrf_token"]):
@@ -105,7 +118,15 @@ def require_user(request: Request) -> Ctx:
 
 
 def require_admin(request: Request) -> Ctx:
-    ctx = require_user(request)
+    ctx = require_user(request, _admin=True)
+    if ctx.auth == "token":
+        if "debug" not in ctx.scopes:
+            raise ApiError(403, "token_scope", "このトークンには管理APIの権限がありません")
+        if request.method not in SAFE_METHODS and request.url.path not in DEBUG_TOKEN_POSTS:
+            raise ApiError(403, "debug_read_only", "デバッグ用トークンは読み取りと診断の実行のみ可能です")
+        if not ctx.p.settings.server.allow_remote_admin and not is_local_admin_request(request, ctx.ip):
+            raise ApiError(403, "admin_local_only", "管理APIはサーバーPC上からのみ利用できます")
+        return ctx
     if ctx.user["role"] != "admin":
         raise ApiError(403, "forbidden", "管理者権限が必要です")
     if ctx.auth != "bearer":

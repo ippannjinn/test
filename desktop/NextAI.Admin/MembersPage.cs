@@ -29,6 +29,8 @@ namespace NextAI.Admin
                 Ui.Btn("信頼端末の管理", (s, e) => Devices()),
                 Ui.Btn("招待情報", (s, e) => Invitation()),
                 Ui.Btn("全ユーザーのセッション失効", (s, e) => RevokeAll()),
+                Ui.Btn("Claude用アカウント発行", (s, e) => IssueClaude()),
+                Ui.Btn("APIトークン", (s, e) => { using (var d = new TokensDialog(Api)) d.ShowDialog(this); }),
                 Ui.Btn("更新", (s, e) => Run(() => Task.CompletedTask)));
             var help = Ui.Label("状態: 有効 → 停止 (一時的・再有効化可) / 無効化 (ログイン不可・データ保持期間後に自動削除) → 完全削除 (無効化済みのみ・確認必須)", null, Ui.Muted);
             help.Dock = DockStyle.Bottom;
@@ -44,7 +46,7 @@ namespace NextAI.Admin
             var d = await Api.GetAsync("/api/admin/users");
             Ui.Fill(grid, d.Arr("users").Objects(), u => new object[]
             {
-                u.Str("username"), u.Str("display_name"), u.Str("role") == "admin" ? "管理者" : "メンバー", StateText(u.Str("state")),
+                u.Str("username"), u.Str("display_name"), u.Str("role") == "admin" ? "管理者" : u.Bool("is_agent") ? "AI (Claude)" : "メンバー", StateText(u.Str("state")),
                 $"{u.Num("storage_used_mb"):F0} / {u.Int("storage_quota_mb")} MB", $"{u.Num("generation_used_today"):F0} / {u.Int("generation_quota_daily")}",
                 u.Int("concurrent_jobs"), u.Int("queue_priority"), u.Int("rate_limit_per_min"), u.Int("active_sessions"), u.Int("trusted_devices"),
                 Ui.Time(u.Num("last_login_at")),
@@ -62,6 +64,30 @@ namespace NextAI.Admin
                     Ui.ShowText(this, "メンバーを作成しました", res.Str("invitation"), "この内容をメンバーに安全な方法で伝えてください");
                 });
             }
+        }
+
+        void IssueClaude()
+        {
+            var days = Ui.Prompt(this, "Claude用アカウント発行",
+                "Claude Code がこのPC上でデバッグ・UI操作するための専用アカウントを発行します。\n"
+                + "・メンバー「claude」(ブラウザUI用) + APIトークン (管理APIは読み取りと診断のみ)\n"
+                + "・再発行すると以前のパスワードとトークンは無効になります\n\nトークンの有効日数 (1〜90):", "7");
+            if (days == null) return;
+            double d;
+            if (!double.TryParse(days, out d) || d <= 0 || d > 90) { MessageBox.Show(this, "1〜90 の数値を入力してください"); return; }
+            Run(async () =>
+            {
+                var r = await Api.PostAsync("/api/admin/agent-account", new JObject { ["days"] = d, ["debug"] = true });
+                var env = System.Text.RegularExpressions.Regex.Replace(r.Str("env"), @"(?m)^NEXTAI_CA=.*$", "NEXTAI_CA=" + Main.Info.CaCertPath.Replace("$", "$$"));
+                var dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nextai");
+                System.IO.Directory.CreateDirectory(dir);
+                var path = System.IO.Path.Combine(dir, "claude.env");
+                System.IO.File.WriteAllText(path, env.Replace("\n", "\r\n"), new System.Text.UTF8Encoding(false));
+                Ui.ShowText(this, "Claude用アカウントを発行しました",
+                    $"接続情報を保存しました: {path}\n\nClaude Code をこのPCで起動し、リポジトリの CLAUDE.md に従って\n"
+                    + "「NextAI をデバッグして」のように依頼してください。\n\n" + env,
+                    "秘密情報です。不要になったら「APIトークン」から失効してください");
+            });
         }
 
         void Edit()
@@ -291,6 +317,51 @@ namespace NextAI.Admin
         {
             if (!Ui.Confirm(this, "このメンバーの全ての信頼端末を解除しますか？")) return;
             try { await api.PostAsync($"/api/admin/users/{user.Str("id")}/revoke-devices"); } catch (Exception ex) { Ui.Error(this, ex); }
+            await LoadData();
+        }
+    }
+
+    sealed class TokensDialog : Form
+    {
+        readonly ApiClient api;
+        readonly DataGridView grid;
+
+        public TokensDialog(ApiClient api)
+        {
+            this.api = api;
+            Text = "APIトークン (自動化 / Claude)";
+            Font = Ui.BaseFont;
+            AutoScaleMode = AutoScaleMode.Dpi;
+            StartPosition = FormStartPosition.CenterParent;
+            Size = new Size(900, 420);
+            grid = Ui.Grid(("user", "アカウント", 100), ("name", "名前", 110), ("scopes", "権限", 110), ("status", "状態", 70),
+                ("created", "発行", 100), ("expires", "期限", 100), ("last", "最終利用", 100), ("ip", "最終IP", 0));
+            Controls.Add(grid);
+            Controls.Add(Ui.Toolbar(Ui.Btn("選択したトークンを失効", async (s, e) => await Revoke()),
+                Ui.Label("debug 権限 = 管理APIの読み取りと診断実行のみ (変更操作は不可)", null, Ui.Muted)));
+            Shown += async (s, e) => await LoadData();
+        }
+
+        async Task LoadData()
+        {
+            try
+            {
+                var d = await api.GetAsync("/api/admin/tokens");
+                Ui.Fill(grid, d.Arr("tokens").Objects(), t => new object[]
+                {
+                    t.Str("username"), t.Str("name"), string.Join(",", t.Arr("scopes").Cast<object>()),
+                    t.Str("status") == "active" ? "有効" : t.Str("status") == "revoked" ? "失効" : "期限切れ",
+                    Ui.Time(t.Num("created_at")), Ui.Time(t.Num("expires_at")), Ui.Time(t.Num("last_used_at")), t.Str("last_ip"),
+                }, (row, t) => row.Cells["status"].Style.ForeColor = Ui.StatusColor(t.Str("status") == "active" ? "ok" : "disabled"));
+            }
+            catch (Exception ex) { Ui.Error(this, ex); }
+        }
+
+        async Task Revoke()
+        {
+            var t = Ui.Selected(grid);
+            if (t == null || !Ui.Confirm(this, "このトークンを失効させますか？")) return;
+            try { await api.DeleteAsync($"/api/admin/tokens/{t.Str("id")}"); } catch (Exception ex) { Ui.Error(this, ex); }
             await LoadData();
         }
     }
