@@ -20,12 +20,12 @@ class ConvBody(BaseModel):
 class MessageBody(BaseModel):
     content: str = Field(min_length=1, max_length=40000)
     attachments: list[str] = Field(default_factory=list, max_length=10)
-    mode: Literal["auto", "fast", "quality"] = "auto"
+    mode: Literal["auto", "fast", "quality", "deep"] = "auto"
     replace_from: str | None = Field(default=None, max_length=64)  # edit: drop this message and everything after
 
 
 class RegenBody(BaseModel):
-    mode: Literal["auto", "fast", "quality"] = "auto"
+    mode: Literal["auto", "fast", "quality", "deep"] = "auto"
 
 
 def _truncate_from(ctx: Ctx, conv_id: str, message_id: str) -> None:
@@ -52,8 +52,11 @@ def list_conversations(ctx: User, limit: int = 100, q: str | None = None):
     sql = "SELECT id, title, created_at, updated_at FROM conversations WHERE user_id=? AND archived=0"
     params: list = [ctx.uid]
     if q:
-        sql += " AND title LIKE ?"
-        params.append(f"%{q[:50]}%")
+        # title or message text (like the chat search of the big apps)
+        sql += (" AND (title LIKE ? ESCAPE '\\' OR id IN (SELECT conversation_id FROM messages WHERE user_id=?"
+                " AND content LIKE ? ESCAPE '\\'))")
+        like = "%" + q[:50].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        params += [like, ctx.uid, like]
     sql += " ORDER BY updated_at DESC LIMIT ?"
     params.append(min(max(limit, 1), 500))
     return {"conversations": ctx.p.db.query(sql, tuple(params))}
@@ -94,6 +97,7 @@ def delete_conversation(conv_id: str, ctx: User):
         if j.conversation_id == conv_id:
             ctx.p.jobs.cancel(j.id, ctx.uid)
     ctx.p.db.execute("DELETE FROM conversations WHERE id=? AND user_id=?", (conv_id, ctx.uid))
+    ctx.p.files.delete_conv_workspace(ctx.uid, conv_id)
     return {"ok": True}
 
 

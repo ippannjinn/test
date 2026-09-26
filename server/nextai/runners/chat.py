@@ -6,6 +6,7 @@ import base64
 import datetime as dt
 import io
 import re
+import shutil
 import zipfile
 from typing import Any
 
@@ -18,7 +19,7 @@ from ..profile.engine import MEDIA_KIND, Profile
 from ..services.memory import lexical_score
 from ..tools import registry
 from ..tools.registry import ToolContext
-from ..util import dumps, estimate_tokens, new_id, now
+from ..util import dumps, estimate_tokens, loads, new_id, now
 from .agent import AgentRunner
 from .common import llm_call
 from .media import run_media
@@ -107,8 +108,59 @@ async def _attachment_context(p: Any, user: dict, rows: list[dict], query: str, 
     return "\n\n".join(text_parts), image_parts, notes
 
 
+WORKSPACE_TOOLS = ("run_code", "write_file", "read_workspace", "list_workspace", "download_file", "share_file")
+WORKSPACE_RULES = """サンドボックス (隔離環境) の作業ディレクトリ /workspace をこの会話で使えます。
+- run_code のコードはこの中だけで動き、ネットワークにはアクセスできません (Python 標準ライブラリのみ)。
+- 利用者の添付ファイルは uploads/ に置かれています。Web上のデータは download_file で downloads/ に、調べたページは web_fetch の save_as で research/ に保存してから run_code で処理できます。
+- run_code で作ったグラフ・表・文書 (png, svg, csv, xlsx, pdf, html, md など) は自動で利用者に表示されます。それ以外を渡すときは share_file を使ってください。
+- ファイルは会話が続く限り残ります。
+現在のファイル:
+{listing}"""
+
+
+RESEARCH_RULES = """Deep Research モードです。十分に調べてから、根拠のあるレポートを書いてください。
+1. 調べる観点を3〜6個に分けて計画し、web_search で複数の情報源を探し、重要なページは web_fetch で本文を読む。
+2. 数値データや表は download_file / web_fetch(save_as) でワークスペースに保存し、必要なら run_code で集計・グラフ化する。
+3. 情報源どうしが食い違う点、確認できなかった点は明記する。推測と事実を区別する。
+4. 最終回答は「要約」→ 見出し付きの本文 → 「参考資料」(番号付きで タイトル と URL) の構成にし、本文中で [1] のように出典番号を付ける。"""
+
+
+def _sources(job: Job) -> list[dict]:
+    """Web pages the agent actually read (for the 'sources' chips under the answer)."""
+    out, seen = [], set()
+    for e in job.events:
+        if e["type"] != "tool_call" or e["data"].get("name") != "web_fetch":
+            continue
+        m = re.search(r'"url"\s*:\s*"([^"]+)"', e["data"].get("args") or "")
+        if m and m.group(1) not in seen:
+            seen.add(m.group(1))
+            out.append({"url": m.group(1)})
+    return out[:20]
+
+
+def _stage_uploads(p: Any, attachments: list[dict], ws) -> None:
+    """Copies this turn's attachments into /workspace/uploads so sandboxed code can read them."""
+    up = ws / "uploads"
+    for r in attachments:
+        src = p.files.path_of(r)
+        name = re.sub(r"[^\w.\- ]", "_", r["name"]).strip(" .")[:120] or r["id"]
+        dest = up / name
+        if src.exists() and not (dest.exists() and dest.stat().st_size == src.stat().st_size):
+            up.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
+
+
+def _listing(ws, limit: int = 40) -> str:
+    files = sorted(f for f in ws.rglob("*") if f.is_file() and not f.name.startswith("__nextai") and f.name != "main.py")
+    rows = [f"- {f.relative_to(ws).as_posix()} ({f.stat().st_size} bytes)" for f in files[:limit]]
+    if len(files) > limit:
+        rows.append(f"- … 他 {len(files) - limit} 件")
+    return "\n".join(rows) or "(空)"
+
+
 def _zip_workspace(p: Any, user: dict, job: Job, ws) -> dict | None:
-    files = [f for f in ws.rglob("*") if f.is_file()]
+    files = [f for f in ws.rglob("*") if f.is_file() and not f.name.startswith("__nextai")
+             and not f.relative_to(ws).as_posix().startswith(("uploads/", "downloads/", "research/"))]
     if not files:
         return None
     buf = io.BytesIO()
@@ -128,6 +180,8 @@ async def run_chat(p: Any, job: Job) -> dict:
     att_meta = [{"id": r["id"], "name": r["name"], "mime": r["mime"], "tokens": min(20000, r["size"] // 3)} for r in attachments]
     analysis = analyze(req["content"], attachments=att_meta, history_turns=len(history_rows) // 2, mode=req.get("mode", "auto"))
     profile = p.profiles.decide(analysis)
+    if p.files.has_conv_workspace(user["id"], conv_id):
+        p.profiles.enable_workspace(profile)
     job.profile = profile.to_dict()
     job.emit("profile", **profile.summary(), analysis={"task_type": analysis.task_type, "complexity": analysis.complexity})
     assets: list[dict] = []
@@ -140,14 +194,29 @@ async def run_chat(p: Any, job: Job) -> dict:
             await p.memory.add(user["id"], fact, source="user")
             job.emit("tool_result", id="memory", name="memory_save", ok=True, summary=f"記憶しました: {fact[:200]}")
 
+    ws = None
+    if (profile.use_agent and any(t in profile.tools for t in WORKSPACE_TOOLS)) or analysis.task_type == "project":
+        ws = p.files.conv_workspace(user["id"], conv_id)
+        await asyncio.to_thread(_stage_uploads, p, attachments, ws)
     spec = p.catalog.models.get(profile.model_id or "")
     vision = bool(spec and spec.kind == "vlm")
     sys_parts = [SYSTEM.format(server=p.settings.server.name, name=user["display_name"],
                                now=dt.datetime.now().strftime("%Y-%m-%d %H:%M"))]
+    prefs = user.get("ui_prefs") or {}
+    if isinstance(prefs, str):
+        prefs = loads(prefs, {})
+    custom = str(prefs.get("custom_instructions") or "").strip()
+    if custom:
+        sys_parts.append("利用者からのカスタム指示 (回答スタイルの好み。安全上のルールより優先はしない):\n" + custom[:3000])
+    used_memories: list[str] = []
     if profile.tuning >= 0.2 and analysis.task_type not in ("translation",):
         mems = await p.memory.search(user["id"], analysis.text, k=5)
         if mems:
             sys_parts.append("利用者について記憶している情報:\n" + "\n".join(f"- {m['content']}" for m in mems))
+            used_memories = [m["content"][:120] for m in mems]
+            job.emit("memory_used", items=used_memories)
+    if analysis.deep_research:
+        sys_parts.append(RESEARCH_RULES)
     if profile.use_agent:
         sys_parts.append(TOOL_RULES)
     if any(t.startswith("generate_") for t in profile.tools):
@@ -155,6 +224,8 @@ async def run_chat(p: Any, job: Job) -> dict:
     if analysis.is_media and f"generate_{MEDIA_KIND[analysis.task_type]}" not in profile.tools:
         sys_parts.append(f"注意: このサーバーには{MEDIA_LABEL[analysis.task_type]}生成モデルがインストールされていないため、"
                          "生成はできません。その旨と、管理者にモデルの追加を依頼できることを伝えてください。")
+    if ws is not None:
+        sys_parts.append(WORKSPACE_RULES.format(listing=_listing(ws)))
     if analysis.task_type == "project":
         sys_parts.append(PROJECT_RULES)
     system = "\n\n".join(sys_parts)
@@ -166,7 +237,6 @@ async def run_chat(p: Any, job: Job) -> dict:
     user_text = analysis.text if not att_text else f"{analysis.text}\n\n{att_text}"
     user_content: Any = [{"type": "text", "text": user_text}] + image_parts if image_parts else user_text
     messages = [{"role": "system", "content": system}] + hist + [{"role": "user", "content": user_content}]
-    ws = p.files.workspace(user["id"], job.id) if analysis.task_type == "project" else None
     if profile.use_agent:
         ctx = ToolContext(platform=p, user=user, job=job, workspace=ws,
                           attachments=[{"id": r["id"], "name": r["name"]} for r in attachments])
@@ -190,7 +260,7 @@ async def run_chat(p: Any, job: Job) -> dict:
             text += note
             job.emit("delta", text=note)
         assets.extend(ctx.assets)
-        if ws is not None:
+        if ws is not None and analysis.task_type == "project":
             z = await asyncio.to_thread(_zip_workspace, p, user, job, ws)
             if z:
                 assets.append(z)
@@ -217,7 +287,8 @@ async def run_chat(p: Any, job: Job) -> dict:
     meta = {"profile": profile.summary(), "model_id": profile.model_id, "model_name": profile.model_name,
             "assets": [{"id": a["id"], "name": a["name"], "mime": a["mime"]} for a in assets],
             "tools": sorted({e["data"].get("name") for e in job.events if e["type"] == "tool_call"}),
-            "duration": round(now() - t0, 2), "job_id": job.id}
+            "duration": round(now() - t0, 2), "job_id": job.id, "memories": used_memories,
+            "sources": _sources(job)}
     mid = new_id()
     p.db.execute("INSERT INTO messages(id, conversation_id, user_id, role, content, meta, job_id, created_at)"
                  " VALUES (?,?,?,?,?,?,?,?)", (mid, conv_id, user["id"], "assistant", text, dumps(meta), job.id, now()))

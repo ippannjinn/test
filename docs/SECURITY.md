@@ -11,7 +11,8 @@
 | ブルートフォース | IP / (ユーザー, IP) / ユーザー全体 の3つのキーで指数的にロックアウト、ログインのレート制限 | `authenticate` |
 | DoS / 独占 | API のトークンバケット、ユーザー別のジョブ数と同時実行数、ボディサイズの上限、アップロードの Content-Length 必須 | `SecurityMiddleware`, `jobs.py` |
 | SSRF | URL の構文検証、DNS の解決結果の検証、接続後の接続先 IP の検証、リダイレクトの再検証、ポートの制限 | `security/ssrf.py`, `tools/web.py` |
-| 任意のコード実行 | WASM サンドボックス (ネットワークなし、プロセスなし、メモリ・時間・ディスクの上限、ワークスペースのみ参照可) | `tools/sandbox.py` |
+| 任意のコード実行 | WASM サンドボックス (ネットワークなし、プロセスなし、メモリ・時間・ディスクの上限)。コードから見えるのは会話ごとの作業ディレクトリ `/workspace` だけで、添付ファイル (uploads/)、SSRF 対策付きでホスト側が取得した Web データ (downloads/, research/) もこの中に置く。ファイル系ツールは相対パスのみ・ワークスペース外は拒否。会話の削除で作業ディレクトリも削除 | `tools/sandbox.py`, `tools/registry.py`, `runners/chat.py` |
+| 生成された HTML / SVG のプレビュー | 通常のファイル配信では HTML/SVG を常にダウンロード扱い。プレビューは専用 URL のみで `CSP: sandbox allow-scripts` (same-origin なし・connect-src なし) + `frame-ancestors 'self'` のため、スクリプトはアプリの Cookie・API・画面に触れられない | `api/files.py` |
 | 権限昇格 | RBAC (admin / member)、自分の情報として変更できる項目のホワイトリスト、最後の管理者を保護、管理 API は管理アプリの Bearer + localhost のみ | `auth/deps.py`, `service.py` |
 | 他ユーザーのデータへのアクセス | すべてのクエリに user_id 条件、パスが自分の領域内にあるかを検証 | `services/files.py` |
 | ローカルの他ユーザー / プロセス | データフォルダの ACL を SYSTEM / Admins / サービスのみに制限、llama-server は 127.0.0.1 のみで待ち受け、起動ごとのランダム API キー | `Installer.cs`, `llamacpp.py` |

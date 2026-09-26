@@ -8,6 +8,7 @@ import json
 import logging
 import logging.handlers
 import os
+import time
 import sys
 from pathlib import Path
 
@@ -54,6 +55,23 @@ def _read_password(args) -> str:
 
 
 # ------------------------------------------------------------------ commands
+def _crash_tracing(s) -> None:
+    """Native crashes (access violations in drivers / extensions) are written to logs/crash.log, and an
+    unclean previous exit is reported, so periodic restarts can be diagnosed from the admin console."""
+    import faulthandler
+
+    run = s.paths.data_dir / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    marker = run / "running"
+    if marker.exists():
+        log.warning("previous server run did not shut down cleanly (crash, kill or power loss) - see crash.log / service.log")
+    marker.write_text(str(os.getpid()), encoding="utf-8")
+    crash = open(s.paths.logs / "crash.log", "a", encoding="utf-8")  # noqa: SIM115 - must stay open for faulthandler
+    crash.write(f"\n--- server start pid={os.getpid()} {time.strftime('%Y-%m-%d %H:%M:%S')} v{__version__}\n")
+    crash.flush()
+    faulthandler.enable(file=crash, all_threads=True)
+
+
 def _port_free(host: str, port: int) -> bool:
     import socket
 
@@ -79,6 +97,7 @@ def cmd_serve(args) -> int:
     setup_logging(s.paths.logs, args.verbose)
     if apply_pending_restore(s):
         s = _settings(args)
+    _crash_tracing(s)
     platform = Platform(s)
     app = create_app(platform)
     srv = s.server
@@ -117,12 +136,15 @@ def cmd_serve(args) -> int:
         log.warning("tunnel port %d is not available; external access via Tailscale Funnel is disabled", srv.tunnel_port)
 
     async def _main() -> None:
+        asyncio.get_running_loop().set_exception_handler(
+            lambda _loop, c: log.error("unhandled asyncio error: %s", c.get("message"), exc_info=c.get("exception")))
         extra = [asyncio.create_task(x.serve()) for x in servers[1:]]
         await server.serve()
         _stop()
         await asyncio.gather(*extra, return_exceptions=True)
 
     asyncio.run(_main())
+    (s.paths.data_dir / "run" / "running").unlink(missing_ok=True)  # clean shutdown
     return platform.exit_code
 
 

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -50,7 +51,14 @@ namespace NextAI.Admin
                 if (pendingUpdate == null) return;
                 try { await Updater.InstallAsync(this, pendingUpdate); } catch (Exception ex) { Ui.Error(this, ex); }
             };
-            strip.Items.AddRange(new ToolStripItem[] { connLabel, new ToolStripSeparator(), svcLabel, new ToolStripSeparator(), userLabel, updateLabel, verLabel });
+            crashLabel = new ToolStripStatusLabel("") { IsLink = true, Visible = false, ForeColor = Ui.Bad };
+            crashLabel.Click += (s, e) =>
+            {
+                crashLabel.Visible = false;
+                var logs = tabs.TabPages.OfType<LogsPage>().FirstOrDefault();
+                if (logs != null) { tabs.SelectedTab = logs; logs.ShowLog("service.log"); }
+            };
+            strip.Items.AddRange(new ToolStripItem[] { connLabel, new ToolStripSeparator(), svcLabel, new ToolStripSeparator(), userLabel, crashLabel, updateLabel, verLabel });
 
             Controls.Add(tabs);
             Controls.Add(strip);
@@ -74,6 +82,7 @@ namespace NextAI.Admin
             catch (Exception) { /* offline or no release yet: stay quiet */ }
         }
 
+        ToolStripStatusLabel crashLabel;
         bool? lastHealth;
         string lastSvc;
 
@@ -95,6 +104,7 @@ namespace NextAI.Admin
                 var ok = await Api.HealthAsync();
                 if (ok != lastHealth || st != lastSvc)
                 {
+                    if (ok && lastHealth == false) await CheckRecentCrash();
                     lastHealth = ok;
                     lastSvc = st;
                     SetConnected(ok, ok ? null : (st == "Running" ? "サーバーが応答しません (起動中の可能性)" : "サービスが停止しています"));
@@ -102,6 +112,25 @@ namespace NextAI.Admin
                 }
             }
             if (tabs.SelectedTab is AdminPage p && p.AutoRefresh) await RefreshPage(p, true);
+        }
+
+        string lastCrashSeen;
+
+        /// <summary>After the server comes back, tell the admin whether it crashed (service host log) instead of
+        /// leaving only a transient "disconnected" state.</summary>
+        async Task CheckRecentCrash()
+        {
+            try
+            {
+                var r = await Api.GetAsync("/api/admin/logs?name=service.log&lines=80");
+                var lines = r.Arr("lines").Cast<object>().Select(x => x.ToString()).ToList();
+                var crash = lines.LastOrDefault(l => l.Contains("server exited with code"));
+                if (crash == null || crash == lastCrashSeen) return;
+                lastCrashSeen = crash;
+                crashLabel.Text = "⚠ サーバーが異常終了し自動復旧しました: " + crash.Substring(0, Math.Min(crash.Length, 90)) + " (クリックでログ)";
+                crashLabel.Visible = true;
+            }
+            catch (Exception) { /* informational only */ }
         }
 
         public async Task RefreshCurrent()
@@ -126,7 +155,8 @@ namespace NextAI.Admin
                     MessageBox.Show(this, "セッションの有効期限が切れました。再度ログインしてください。", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
                     Application.Restart();
                 }
-                else if (!silent) Ui.Error(this, ex);
+                // Connection problems are shown in the status bar (and recover on their own); no pop-up for them.
+                else if (!silent && ex.Status != 0) Ui.Error(this, ex);
             }
             finally { refreshing = false; }
         }

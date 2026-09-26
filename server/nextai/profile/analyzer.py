@@ -63,6 +63,7 @@ class TaskAnalysis:
     urls: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     text: str = ""
+    deep_research: bool = False
 
     @property
     def capability(self) -> str:
@@ -169,4 +170,10 @@ def analyze(text: str, *, attachments: list[dict] | None = None, history_turns: 
         c = 0.05
         a.reasons.append("短い雑談")
     a.complexity = round(clamp(c, 0.0, 1.0), 3)
+    if mode == "deep" and not a.is_media:
+        # Deep Research: multi-step web research with a cited report (quality-pinned, plans and verifies)
+        a.deep_research = True
+        a.task_type, a.needs_web, a.multi_step, a.explicit_mode = "research", True, True, "quality"
+        a.complexity = max(a.complexity, 0.85)
+        a.reasons.append("Deep Research モード")
     return a

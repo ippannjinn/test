@@ -130,7 +130,8 @@ class AuthService:
             elif k == "ui_prefs":
                 if not isinstance(v, dict):
                     raise AuthError("invalid_value", "ui_prefs が不正です", 400)
-                v = dumps({str(a)[:40]: b for a, b in list(v.items())[:40] if isinstance(b, (str, int, float, bool))})
+                v = dumps({str(a)[:40]: (b[:4000] if isinstance(b, str) else b) for a, b in list(v.items())[:40]
+                           if isinstance(b, (str, int, float, bool))})
             elif k == "role":
                 if v not in ROLES:
                     raise AuthError("invalid_role", "ロールが不正です", 400)

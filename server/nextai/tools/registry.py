@@ -21,6 +21,7 @@ class ToolContext:
     attachments: list[dict] = field(default_factory=list)
     web_requests: int = 0
     assets: list[dict] = field(default_factory=list)
+    presented: dict[str, float] = field(default_factory=dict)  # workspace rel path -> mtime already shown
 
 
 @dataclass
@@ -76,7 +77,9 @@ class WebFetch(Tool):
     name = "web_fetch"
     description = "Fetch a public web page (http/https) and return its readable text."
     parameters = {"type": "object", "properties": {
-        "url": {"type": "string"}, "max_chars": {"type": "integer", "minimum": 500, "maximum": 30000}},
+        "url": {"type": "string"}, "max_chars": {"type": "integer", "minimum": 500, "maximum": 30000},
+        "save_as": {"type": "string", "description": "optional: also save the page text into the sandbox workspace "
+                                                     "(e.g. research/page1.md) so run_code can analyse it"}},
         "required": ["url"]}
     timeout = 45
 
@@ -87,15 +90,90 @@ class WebFetch(Tool):
         except SSRFError as e:
             return ToolResult(False, f"アクセスが拒否されました: {e}")
         links = "\n".join(f"- {t}: {u}" for t, u in page.get("links", [])[:10])
+        saved = ""
+        if args.get("save_as") and ctx.workspace is not None:
+            p = _ws_path(ctx, str(args["save_as"]))
+            body = f"# {page['title']}\nSource: {page['url']}\n\n{page['text']}"
+            ctx.platform.files.check_quota(ctx.user, len(body.encode("utf-8")))
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
+            saved = f"\n(saved to /workspace/{p.relative_to(ctx.workspace).as_posix()})"
         return ToolResult(page["status"] < 400,
-                          f"URL: {page['url']}\nHTTP {page['status']}\nTitle: {page['title']}\n\n{page['text']}"
+                          f"URL: {page['url']}\nHTTP {page['status']}\nTitle: {page['title']}{saved}\n\n{page['text']}"
                           + (f"\n\nLinks:\n{links}" if links else ""), {"url": page["url"]})
+
+
+class DownloadFile(Tool):
+    name = "download_file"
+    description = ("Download a public file (CSV, JSON, Excel, PDF, image, dataset, ...) from http/https into the sandbox "
+                   "workspace so run_code can process it. Internal/LAN addresses are blocked.")
+    parameters = {"type": "object", "properties": {
+        "url": {"type": "string"}, "save_as": {"type": "string", "description": "relative path, e.g. downloads/data.csv"}},
+        "required": ["url"]}
+    timeout = 120
+
+    async def run(self, ctx, args):
+        _web_budget(ctx)
+        if ctx.workspace is None:
+            return ToolResult(False, "ワークスペースがありません")
+        url = str(args.get("url", ""))
+        limit = int(ctx.platform.settings.web.max_download_mb) * 2**20
+        try:
+            res = await ctx.platform.web.fetch(url, max_bytes=limit + 1)
+        except SSRFError as e:
+            return ToolResult(False, f"アクセスが拒否されました: {e}")
+        if res.status >= 400:
+            return ToolResult(False, f"HTTP {res.status}")
+        if len(res.body) > limit:
+            return ToolResult(False, f"ファイルが大きすぎます (上限 {limit // 2**20}MB)")
+        name = str(args.get("save_as") or "") or "downloads/" + (_url_name(res.url) or "download.bin")
+        p = _ws_path(ctx, name)
+        ctx.platform.files.check_quota(ctx.user, len(res.body))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(res.body)
+        rel = p.relative_to(ctx.workspace).as_posix()
+        return ToolResult(True, f"saved /workspace/{rel} ({len(res.body)} bytes, {res.content_type or 'unknown type'})",
+                          {"path": rel})
+
+
+def _url_name(url: str) -> str:
+    from urllib.parse import unquote, urlsplit
+
+    name = unquote(urlsplit(url).path.rsplit("/", 1)[-1])
+    name = re.sub(r"[^\w.\-]", "_", name)[:80].strip("._")
+    return name
+
+
+# Files a run produces that are worth showing to the user automatically (charts, tables, documents, media).
+DELIVERABLE = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".wav", ".mp3", ".ogg", ".mp4", ".webm", ".pdf",
+               ".csv", ".xlsx", ".docx", ".pptx", ".zip", ".html", ".md", ".txt", ".json"}
+INPUT_DIRS = ("uploads/", "downloads/", "research/")
+
+
+def present(ctx: ToolContext, rel: str) -> dict | None:
+    """Registers a workspace file as a result the user sees (once per version)."""
+    p = _ws_path(ctx, rel)
+    if not p.is_file():
+        raise ToolError(f"ファイルがありません: {rel}")
+    mtime = p.stat().st_mtime
+    if ctx.presented.get(rel) == mtime:
+        return None
+    if p.stat().st_size > 50 * 2**20:
+        raise ToolError("50MB を超えるファイルは表示できません")
+    row = ctx.platform.files.save_path(ctx.user, p, p.name, kind="generated", job_id=ctx.job.id,
+                                       meta={"source": "sandbox", "workspace_path": rel})
+    ctx.presented[rel] = mtime
+    ctx.assets.append(row)
+    ctx.job.emit("asset", file_id=row["id"], name=row["name"], mime=row["mime"], kind="file")
+    return row
 
 
 class RunCode(Tool):
     name = "run_code"
-    description = ("Run Python 3 code in an isolated sandbox (no network, limited CPU/RAM/time). "
-                   "Print results to stdout. Files written to the current directory are returned.")
+    description = ("Run Python 3 (standard library only) in the isolated sandbox: no network, limited CPU/RAM/time. "
+                   "The working directory /workspace persists for this conversation and contains the user's uploads "
+                   "(uploads/), downloaded data (downloads/) and saved research (research/). Print results to stdout. "
+                   "New charts/tables/documents you write (png, svg, csv, xlsx, pdf, html, md, ...) are shown to the user.")
     parameters = {"type": "object", "properties": {"code": {"type": "string", "description": "complete Python program"}},
                   "required": ["code"]}
     timeout = 90
@@ -105,14 +183,34 @@ class RunCode(Tool):
         if not code.strip():
             return ToolResult(False, "コードが空です")
         res = await ctx.platform.sandbox.run(ctx.user["id"], code, workspace=ctx.workspace)
-        for name, data in list(res.artifacts.items())[:5]:
-            try:
-                row = ctx.platform.files.save_bytes(ctx.user, Path(name).name, data, kind="generated", job_id=ctx.job.id,
-                                                    meta={"source": "sandbox"})
-                ctx.assets.append(row)
-            except Exception:  # noqa: BLE001 - quota errors are reported below
-                res.error = (res.error + " / 出力ファイルを保存できませんでした").strip(" /")
-        return ToolResult(res.ok, res.to_text(), {"exit_code": res.exit_code, "files": res.files})
+        shown = []
+        if ctx.workspace is None:
+            for name, data in list(res.artifacts.items())[:5]:
+                if Path(name).suffix.lower() not in DELIVERABLE:
+                    continue
+                try:
+                    row = ctx.platform.files.save_bytes(ctx.user, Path(name).name, data, kind="generated",
+                                                        job_id=ctx.job.id, meta={"source": "sandbox"})
+                    ctx.assets.append(row)
+                    shown.append(row["name"])
+                except Exception:  # noqa: BLE001 - quota errors are reported below
+                    res.error = (res.error + " / 出力ファイルを保存できませんでした").strip(" /")
+        else:
+            for rel in res.files:
+                if (Path(rel).suffix.lower() not in DELIVERABLE or rel.startswith(INPUT_DIRS)
+                        or any(part.startswith((".", "__")) for part in Path(rel).parts)):
+                    continue
+                if len(shown) >= 8:
+                    break
+                try:
+                    if present(ctx, rel):
+                        shown.append(rel)
+                except Exception:  # noqa: BLE001
+                    res.error = (res.error + f" / {rel} を表示できませんでした").strip(" /")
+        text = res.to_text()
+        if shown:
+            text += "\n\nshown to the user: " + ", ".join(shown)
+        return ToolResult(res.ok, text, {"exit_code": res.exit_code, "files": res.files})
 
 
 def _chunks(text: str, size: int = 1800) -> list[str]:
@@ -169,7 +267,7 @@ def _ws_path(ctx: ToolContext, rel: str) -> Path:
 
 class WriteFile(Tool):
     name = "write_file"
-    description = "Create or overwrite a file in the project workspace (relative path)."
+    description = "Create or overwrite a text file in the sandbox workspace (/workspace, relative path)."
     parameters = {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
                   "required": ["path", "content"]}
 
@@ -186,7 +284,7 @@ class WriteFile(Tool):
 
 class ReadWorkspace(Tool):
     name = "read_workspace"
-    description = "Read a file from the project workspace."
+    description = "Read a text file from the sandbox workspace (relative path)."
     parameters = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
 
     async def run(self, ctx, args):
@@ -198,7 +296,7 @@ class ReadWorkspace(Tool):
 
 class ListWorkspace(Tool):
     name = "list_workspace"
-    description = "List files in the project workspace."
+    description = "List files in the sandbox workspace (uploads/, downloads/, research/ and your outputs)."
     parameters = {"type": "object", "properties": {}}
 
     async def run(self, ctx, args):
@@ -207,6 +305,18 @@ class ListWorkspace(Tool):
         files = [f"{p.relative_to(ctx.workspace).as_posix()} ({p.stat().st_size}B)"
                  for p in sorted(ctx.workspace.rglob("*")) if p.is_file()]
         return ToolResult(True, "\n".join(files) or "(空)")
+
+
+class ShareFile(Tool):
+    name = "share_file"
+    description = ("Show / hand a file from the sandbox workspace to the user (e.g. a script, dataset or document they "
+                   "asked for). Charts and documents created by run_code are shown automatically.")
+    parameters = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+
+    async def run(self, ctx, args):
+        rel = str(args.get("path", "")).strip().removeprefix("/workspace/")
+        row = present(ctx, rel)
+        return ToolResult(True, f"shown to the user: {rel}" if row else f"{rel} is already shown")
 
 
 class MemorySearch(Tool):
@@ -312,7 +422,8 @@ class GenerateMedia(Tool):
 
 
 ALL_TOOLS: dict[str, Tool] = {t.name: t for t in (WebSearch(), WebFetch(), RunCode(), ReadFile(), WriteFile(),
-                                                  ReadWorkspace(), ListWorkspace(), MemorySearch(), MemorySave(),
+                                                  ReadWorkspace(), ListWorkspace(), ShareFile(), DownloadFile(),
+                                                  MemorySearch(), MemorySave(),
                                                   GenerateMedia("image"), GenerateMedia("video"), GenerateMedia("music"))}
 
 

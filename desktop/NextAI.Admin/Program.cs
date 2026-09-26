@@ -21,7 +21,12 @@ namespace NextAI.Admin
                 }
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                Application.ThreadException += (s, e) => Ui.Error(null, e.Exception);
+                Application.ThreadException += (s, e) =>
+                {
+                    // lost connection while the server restarts: the status bar already says so
+                    if (e.Exception is ApiException api && api.Status == 0) return;
+                    Ui.Error(null, e.Exception);
+                };
                 var info = InstallInfo.LoadNextToExe();
                 using (var login = new LoginForm(info))
                 {

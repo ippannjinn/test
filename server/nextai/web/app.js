@@ -55,6 +55,12 @@ const ICONS = {
   music: "M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
   pen: "M12 19l7-7 3 3-7 7zM18 13l-1.5-7.5L2 2l3.5 14.5L13 18zM2 2l7.6 7.6",
   x: "M18 6 6 18M6 6l12 12",
+  download: "M12 3v12M7 10l5 5 5-5M5 21h14",
+  eye: "M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  speaker: "M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14",
+  table: "M3 3h18v18H3zM3 9h18M3 15h18M9 3v18",
+  link: "M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7",
+  thought: "M12 3a7 7 0 0 0-4 12.7V18h8v-2.3A7 7 0 0 0 12 3zM9 21h6",
   paperclip: "M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5",
 };
 function icon(name, size = 18) {
@@ -254,7 +260,14 @@ function showApp() {
   const title = h("div", { class: "hdr-title" });
   const headerRight = h("div", { class: "hdr-right" });
   const search = h("input", { class: "search-input", type: "search", placeholder: "チャットを検索", "aria-label": "チャットを検索",
-    oninput: () => { S.search = search.value.trim(); renderConvs(); } });
+    oninput: () => {
+      S.search = search.value.trim(); S.hits = null; renderConvs();
+      clearTimeout(S.searchTimer);
+      if (S.search.length >= 2) S.searchTimer = setTimeout(async () => {
+        const q = S.search;
+        try { const d = await api(`/api/conversations?q=${encodeURIComponent(q)}`); if (q === S.search) { S.hits = d.conversations; renderConvs(); } } catch { /* ignore */ }
+      }, 250);
+    } });
   const layout = h("div", { class: "layout" + (store.get("nextai.sidebar", true) ? "" : " collapsed") });
   const toggle = () => {
     if (matchMedia("(max-width: 860px)").matches) layout.classList.toggle("open");
@@ -341,7 +354,7 @@ function convGroups(list) {
 
 function renderConvs() {
   const q = S.search.toLowerCase();
-  const list = q ? S.convs.filter((c) => c.title.toLowerCase().includes(q)) : S.convs;
+  const list = !q ? S.convs : (S.hits && S.search.length >= 2 ? S.hits : S.convs.filter((c) => c.title.toLowerCase().includes(q)));
   if (!list.length) { shell.convs.replaceChildren(h("div", { class: "muted small pad" }, q ? "見つかりません" : "会話はまだありません")); return; }
   shell.convs.replaceChildren(...convGroups(list).map(([label, items]) => h("div", { class: "conv-group" }, h("div", { class: "group-label" }, label),
     items.map((c) => {
@@ -377,6 +390,7 @@ const MODES = [
   ["auto", "自動", "内容と混雑状況から最適なモデルと推論の深さを選びます", "spark"],
   ["fast", "速さ優先", "軽いモデルで素早く答えます", "bolt"],
   ["quality", "品質優先", "混雑していても高性能な設定で待って答えます", "gem"],
+  ["deep", "じっくり調査", "Web を深く調べ、出典付きのレポートを作ります (数分かかります)", "globe"],
 ];
 function newChat() { S.convId = null; S.attach = []; if (S.view === "chat") openChat(null); }
 
@@ -426,7 +440,9 @@ async function openChat(convId) {
   messages.addEventListener("scroll", () => toBottom.classList.toggle("show", messages.scrollHeight - messages.scrollTop - messages.clientHeight > 240));
   chat = { inner, messages, ta, attached, sendBtn, status, wrap, autosize, below };
   shell.main.replaceChildren(wrap);
-  shell.headerRight.replaceChildren(iconBtn("newchat", "新しいチャット (Ctrl+Shift+O)", () => { go("chat"); newChat(); }));
+  shell.headerRight.replaceChildren(...[
+    convId ? iconBtn("download", "Markdown で書き出し", () => exportConv(convId)) : null,
+    iconBtn("newchat", "新しいチャット (Ctrl+Shift+O)", () => { go("chat"); newChat(); })].filter(Boolean));
   renderAttached();
   refreshStatus();
   if (!convId) { wrap.classList.add("welcome"); renderEmpty(); ta.focus(); return; }
@@ -439,6 +455,20 @@ async function openChat(convId) {
     scrollDown(true);
   } catch (e) { inner.replaceChildren(h("div", { class: "empty" }, e.message)); }
   if (!matchMedia("(pointer: coarse)").matches) ta.focus();
+}
+
+async function exportConv(convId) {
+  try {
+    const d = await api(`/api/conversations/${convId}`);
+    const md = [`# ${d.conversation.title}`, ""];
+    for (const m of d.messages) {
+      md.push(m.role === "user" ? `## ${S.user.display_name}` : `## ${S.info.name || "AI"}`, "", m.content, "");
+      for (const a of m.meta?.assets || []) md.push(`- 添付: ${a.name}`);
+    }
+    const blob = new Blob([md.join("\n")], { type: "text/markdown" });
+    const a = h("a", { href: URL.createObjectURL(blob), download: `${d.conversation.title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 60)}.md` });
+    document.body.append(a); a.click(); a.remove();
+  } catch (e) { toast(e.message); }
 }
 
 function updateSend() {
@@ -488,12 +518,59 @@ function scrollDown(force, smooth) {
   if (force || m.scrollHeight - m.scrollTop - m.clientHeight < 160) m.scrollTo({ top: m.scrollHeight, behavior: smooth ? "smooth" : "auto" });
 }
 
+// Preview policy (like the big chat apps): media is shown inline; charts/pages (HTML, SVG) and small text-like files
+// (CSV, code, Markdown, JSON) get an on-demand preview; everything else is a download card.
+const TEXT_EXT = /\.(txt|md|csv|tsv|json|py|js|ts|css|xml|ya?ml|toml|ini|log|sql|sh|bat|ps1|c|cpp|h|java|go|rs|rb|php|tex)$/i;
+const RENDER_EXT = /\.(html?|svg)$/i;
+const KIND_LABEL = [[/\.pdf$/i, "PDF"], [/\.(xlsx|xls)$/i, "Excel"], [/\.(docx|doc)$/i, "Word"], [/\.(pptx|ppt)$/i, "PowerPoint"],
+  [/\.zip$/i, "ZIP"], [/\.csv$/i, "CSV"], [/\.(md)$/i, "Markdown"], [/\.json$/i, "JSON"], [/\.(html?)$/i, "HTML"], [/\.svg$/i, "SVG"]];
+function fileKind(name) { return (KIND_LABEL.find(([rx]) => rx.test(name)) || [null, (name.split(".").pop() || "file").toUpperCase()])[1]; }
+
 function assetEl(a) {
   const url = `/api/files/${a.id}/content`;
-  if (a.mime?.startsWith("image/")) return h("a", { class: "asset-img", href: url, target: "_blank", rel: "noopener" }, h("img", { src: url, alt: a.name, loading: "lazy" }));
-  if (a.mime?.startsWith("audio/")) return h("audio", { controls: true, src: url, preload: "none" });
-  if (a.mime?.startsWith("video/")) return h("video", { controls: true, src: url, preload: "none", class: "vid" });
-  return h("a", { class: "file-link", href: `${url}?download=1` }, icon("file", 16), a.name);
+  const mime = a.mime || "";
+  if (mime.startsWith("image/") && mime !== "image/svg+xml") return h("a", { class: "asset-img", href: url, target: "_blank", rel: "noopener" }, h("img", { src: url, alt: a.name, loading: "lazy" }));
+  if (mime.startsWith("audio/")) return h("audio", { controls: true, src: url, preload: "none" });
+  if (mime.startsWith("video/")) return h("video", { controls: true, src: url, preload: "none", class: "vid" });
+  const renderable = RENDER_EXT.test(a.name), textual = TEXT_EXT.test(a.name);
+  const body = h("div", { class: "fc-body", hidden: true });
+  const toggle = (renderable || textual) ? h("button", { class: "btn small", type: "button" }, icon("eye", 15), "プレビュー") : null;
+  const card = h("div", { class: "file-card" },
+    h("div", { class: "fc-head" }, h("span", { class: "fc-ic" }, icon(/\.(csv|xlsx?)$/i.test(a.name) ? "table" : RENDER_EXT.test(a.name) || TEXT_EXT.test(a.name) ? "code" : "file", 18)),
+      h("div", { class: "grow" }, h("div", { class: "fc-name", title: a.name }, a.name), h("div", { class: "fc-kind" }, fileKind(a.name))),
+      toggle, h("a", { class: "btn small", href: `${url}?download=1`, title: "ダウンロード" }, icon("download", 15))),
+    body);
+  if (toggle) toggle.onclick = async () => {
+    if (!body.hidden) { body.hidden = true; toggle.lastChild.textContent = "プレビュー"; return; }
+    body.hidden = false; toggle.lastChild.textContent = "閉じる";
+    if (body.childElementCount) return;
+    if (renderable) { body.append(h("iframe", { class: "preview-frame", src: `/api/files/${a.id}/preview`, sandbox: "allow-scripts allow-popups allow-modals", title: a.name })); return; }
+    try {
+      const d = await api(`/api/files/${a.id}/text?max_bytes=120000`);
+      body.append(/\.(csv|tsv)$/i.test(a.name) ? csvTable(d.text, /\.tsv$/i.test(a.name) ? "\t" : ",")
+        : /\.md$/i.test(a.name) ? mdEl(d.text) : h("pre", { class: "fc-pre" }, h("code", {}, d.text)));
+      if (d.truncated) body.append(h("div", { class: "muted small" }, "(先頭のみ表示しています)"));
+    } catch (e) { body.append(h("div", { class: "error" }, e.message)); }
+  };
+  return card;
+}
+
+function csvTable(text, sep) {
+  const rows = [];
+  for (const line of text.split(/\r?\n/).slice(0, 101)) {
+    if (!line.trim()) continue;
+    const cells = []; let cur = "", q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
+      else if (c === '"') q = true; else if (c === sep) { cells.push(cur); cur = ""; } else cur += c;
+    }
+    cells.push(cur); rows.push(cells);
+  }
+  if (!rows.length) return h("div", { class: "muted small" }, "(空)");
+  const [head, ...rest] = rows;
+  return h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, head.map((c) => h("th", {}, c)))),
+    h("tbody", {}, rest.map((r) => h("tr", {}, r.map((c) => h("td", {}, c)))))));
 }
 
 function metaInfo(meta) {
@@ -506,7 +583,50 @@ function metaInfo(meta) {
 function mdEl(text) {
   const el = h("div", { class: "md", html: renderMarkdown(text) });
   el.querySelectorAll("button.copy").forEach((b) => b.addEventListener("click", () => copyText(b.closest(".code").querySelector("code").textContent, b)));
+  el.querySelectorAll(".code").forEach((blk) => {
+    const lang = (blk.querySelector("code")?.dataset.lang || "").toLowerCase();
+    if (!["html", "svg", "xml"].includes(lang)) return;
+    const src = blk.querySelector("code").textContent;
+    if (lang === "xml" && !/^\s*<svg[\s>]/i.test(src)) return;
+    const btn = h("button", { type: "button", class: "copy" }, "プレビュー");
+    let frame = null;
+    btn.onclick = async () => {
+      if (frame) { frame.remove(); frame = null; btn.textContent = "プレビュー"; return; }
+      try {
+        const d = await api("/api/preview", { method: "POST", body: { kind: lang === "html" ? "html" : "svg", content: src } });
+        frame = h("iframe", { class: "preview-frame", src: d.url, sandbox: "allow-scripts allow-popups allow-modals", title: "preview" });
+        blk.after(frame); btn.textContent = "閉じる";
+      } catch (e) { toast(e.message); }
+    };
+    blk.querySelector(".code-head").insertBefore(btn, blk.querySelector(".code-head .copy"));
+  });
   return el;
+}
+
+function sourcesEl(list) {
+  if (!list?.length) return null;
+  return h("div", { class: "sources" }, h("span", { class: "src-label" }, "参照したページ"), list.slice(0, 12).map((x, i) => {
+    let host = x.url;
+    try { host = new URL(x.url).hostname.replace(/^www\./, ""); } catch { /* keep */ }
+    return h("a", { class: "src", href: x.url, target: "_blank", rel: "noopener noreferrer nofollow", title: x.url }, h("span", { class: "n" }, i + 1), host);
+  }));
+}
+
+function memoryChip(items) {
+  if (!items?.length) return null;
+  return h("span", { class: "mem-chip", title: "この回答で参照した記憶:\n" + items.map((x) => "・" + x).join("\n") }, icon("brain", 14), `記憶 ${items.length}`);
+}
+
+function plainText(md) { return md.replace(/```[\s\S]*?```/g, " (コード) ").replace(/[#*_>`|~-]+/g, " ").replace(/\[(.*?)\]\(.*?\)/g, "$1"); }
+function speakBtn(text) {
+  if (!("speechSynthesis" in window)) return null;
+  const b = iconBtn("speaker", "読み上げ", () => {
+    if (speechSynthesis.speaking) { speechSynthesis.cancel(); return; }
+    const u = new SpeechSynthesisUtterance(plainText(text).slice(0, 6000));
+    u.lang = /[぀-ヿ一-鿿]/.test(text) ? "ja-JP" : "en-US";
+    speechSynthesis.speak(u);
+  });
+  return b;
 }
 
 function actionBar(...btns) { return h("div", { class: "msg-actions" }, ...btns); }
@@ -526,7 +646,7 @@ function renderMessage(m, isLast = false) {
   const regen = isLast ? iconBtn("refresh", "再生成", () => regenerate()) : null;
   return h("div", { class: "msg assistant" }, h("div", { class: "ai-avatar" }, h("img", { src: "icon.svg", alt: "" })),
     h("div", { class: "body" }, mdEl(m.content), assets.length ? h("div", { class: "assets" }, assets) : null,
-      actionBar(copyB, regen, metaInfo(m.meta))));
+      sourcesEl(m.meta?.sources), actionBar(copyB, speakBtn(m.content), regen, memoryChip(m.meta?.memories), metaInfo(m.meta))));
 }
 
 function editMessage(m) {
@@ -606,10 +726,14 @@ function attachLive(jobId) {
   const steps = h("div", { class: "steps" });
   const stepsBox = h("details", { class: "activity", hidden: true }, h("summary", {}, icon("chevron", 14), h("span", {}, "実行ログ")), steps);
   const content = h("div", { class: "md typing" });
+  const thinkText = h("div", { class: "think-text" });
+  const think = h("details", { class: "thinking", hidden: true, open: true }, h("summary", {}, icon("thought", 14), h("span", {}, "思考中…")), thinkText);
+  let thought = "";
+  const memHolder = h("span");
   const assets = h("div", { class: "assets" });
   const info = h("span", { class: "meta-info" });
   const el = h("div", { class: "msg assistant live", "data-job": jobId }, h("div", { class: "ai-avatar spin" }, h("img", { src: "icon.svg", alt: "" })),
-    h("div", { class: "body" }, h("div", { class: "live-status" }, statusLine), prog, stepsBox, content, assets, actionBar(info)));
+    h("div", { class: "body" }, h("div", { class: "live-status" }, statusLine), prog, think, stepsBox, content, assets, actionBar(memHolder, info)));
   chat.inner.append(el);
   let text = "", pending = false, nsteps = 0;
   const paint = () => {
@@ -639,7 +763,12 @@ function attachLive(jobId) {
   on("notice", (n) => addStep("ℹ " + n.message));
   on("reset", (r) => { if (r.moved) addStep("… " + r.moved.slice(0, 300)); text = ""; paint(); });
   on("snapshot", (s) => { text = s.text || ""; paint(); });
-  on("delta", (d) => { text += d.text; paint(); });
+  on("delta", (d) => {
+    if (!text && thought) { think.open = false; think.querySelector("summary span").textContent = "思考過程"; }
+    text += d.text; paint();
+  });
+  on("reasoning", (d) => { thought += d.text; think.hidden = false; thinkText.textContent = thought; });
+  on("memory_used", (d) => memHolder.replaceWith(memoryChip(d.items) || memHolder));
   on("progress", (p) => { prog.hidden = false; prog.firstChild.style.width = `${Math.round((p.value || 0) * 100)}%`; if (p.message) statusLine.textContent = p.message; });
   on("asset", (a) => { assets.append(assetEl({ id: a.file_id, name: a.name, mime: a.mime })); scrollDown(); });
   on("error", (e) => addStep("⚠ " + (e.message || "エラー")));
@@ -662,6 +791,7 @@ function attachLive(jobId) {
         if (m) {
           const fresh = renderMessage(m, true);
           if (nsteps) fresh.querySelector(".body").prepend(stepsBox);
+          if (thought) { think.open = false; think.querySelector("summary span").textContent = "思考過程"; fresh.querySelector(".body").prepend(think); }
           el.replaceWith(fresh);
         }
       } catch { /* keep live view */ }
@@ -674,7 +804,8 @@ function attachLive(jobId) {
 // ---------------------------------------------------------------- generated media gallery (shown in Files)
 async function loadGallery(el) {
   try {
-    const files = (await api("/api/files?kind=generated&limit=60")).files;
+    const files = (await api("/api/files?kind=generated&limit=120")).files
+      .filter((f) => /^(image|audio|video)\//.test(f.mime) && f.mime !== "image/svg+xml").slice(0, 60);
     el.replaceChildren(...files.map((f) => h("div", { class: "g" },
       f.mime.startsWith("image/") ? h("a", { href: `/api/files/${f.id}/content`, target: "_blank", rel: "noopener" }, h("img", { src: `/api/files/${f.id}/content`, loading: "lazy", alt: f.name }))
         : f.mime.startsWith("video/") ? h("video", { controls: true, src: `/api/files/${f.id}/content`, preload: "metadata" })
@@ -776,6 +907,7 @@ async function viewSettings() {
       h("div", { class: "grid2" }, h("label", { class: "field" }, h("span", {}, "テーマ"), theme),
         h("label", { class: "check" }, enter, "Enterキーで送信する")),
       h("div", { class: "row" }, h("span", { class: "muted small" }, `ユーザー名: ${u.username} / ロール: ${u.role === "admin" ? "管理者" : "メンバー"}`), h("div", { class: "spacer" }), save)),
+    customCard(),
     h("div", { class: "card" }, h("h3", {}, "利用状況"),
       h("div", { class: "small" }, `ストレージ ${us.storage_used_mb}MB / ${us.storage_quota_mb}MB`), meter(us.storage_used_mb, us.storage_quota_mb),
       h("div", { class: "small" }, `本日の生成 ${us.generation_used_today} / ${us.generation_quota_daily}`), meter(us.generation_used_today, us.generation_quota_daily),
@@ -800,6 +932,20 @@ async function viewSettings() {
       h("div", { class: "row" }, h("button", { class: "btn", onclick: () => logout(false) }, "ログアウト"),
         h("button", { class: "btn danger", onclick: () => logout(true) }, "ログアウトしてこの端末の信頼を解除")),
       h("p", { class: "muted small" }, "証明書の警告が出る端末では ", h("a", { href: "/ca.crt" }, "CA証明書"), " をインストールしてください。")));
+}
+
+function customCard() {
+  const ta = h("textarea", { class: "input", rows: 5, maxlength: 3000,
+    placeholder: "例: 私は高校の数学教師です。回答は簡潔に、箇条書きを多めに。コードには日本語のコメントを付けてください。" }, S.prefs.custom_instructions || "");
+  const save = h("button", { class: "btn primary", onclick: async () => {
+    try {
+      const d = await api("/api/account/profile", { method: "PATCH", body: { ui_prefs: { ...S.prefs, custom_instructions: ta.value.trim() } } });
+      S.user = d.user; S.prefs = { ...S.prefs, ...d.user.ui_prefs }; toast("カスタム指示を保存しました");
+    } catch (e) { toast(e.message); }
+  } }, "保存");
+  return h("div", { class: "card" }, h("h3", {}, "カスタム指示"),
+    h("p", { class: "muted small" }, "あなたについての情報や、回答の好み (長さ・口調・形式など) を書いておくと、すべての会話で考慮されます。"),
+    ta, h("div", { class: "row" }, h("span", { class: "muted small" }, "最大3000文字"), h("div", { class: "spacer" }), save));
 }
 
 function apiKeysCard() {

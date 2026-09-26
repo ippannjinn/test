@@ -93,6 +93,24 @@ class FileStore:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
+    def conv_workspace(self, user_id: str, conv_id: str) -> Path:
+        """Per-conversation sandbox workspace (mounted as /workspace for run_code; persists across turns)."""
+        if not _ID_RE.match(conv_id or ""):
+            raise ValueError("invalid conversation id")
+        p = self.safe_path(user_id, f"workspaces/conv-{conv_id}")
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def has_conv_workspace(self, user_id: str, conv_id: str) -> bool:
+        if not _ID_RE.match(conv_id or ""):
+            return False
+        p = self.safe_path(user_id, f"workspaces/conv-{conv_id}")
+        return p.is_dir() and any(f.is_file() for f in p.rglob("*"))
+
+    def delete_conv_workspace(self, user_id: str, conv_id: str) -> None:
+        if _ID_RE.match(conv_id or ""):
+            shutil.rmtree(self.safe_path(user_id, f"workspaces/conv-{conv_id}"), ignore_errors=True)
+
     # ------------------------------------------------------------------ quota
     def usage_bytes(self, user_id: str) -> int:
         files = int(self.db.scalar("SELECT COALESCE(SUM(size),0) FROM files WHERE user_id=?", (user_id,)) or 0)

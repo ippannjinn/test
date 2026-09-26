@@ -175,7 +175,7 @@ def create_app(platform: Platform, manage_lifecycle: bool = True) -> FastAPI:
         return _err(500, "internal_error", "サーバー内部エラーが発生しました")
 
     for r in (system.router, auth.router, account.router, chat.router, jobs.router, files.router, generate.router,
-              memory.router, admin.router, openai.router):
+              memory.router, admin.router, openai.router, files.preview_router):
         app.include_router(r)
 
     web_dir = Path(str(resources.files("nextai").joinpath("web")))

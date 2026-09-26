@@ -140,6 +140,16 @@ class ProfileEngine:
                        reasons=[r for r in chat.reasons if "ロード予定" not in r])
         return self._media_profile(prof, a)
 
+    def enable_workspace(self, prof: Profile) -> None:
+        """The conversation already has sandbox files: keep them reachable (follow-ups like "そのファイルを渡して")."""
+        if not self.sandbox_enabled_fn():
+            return
+        prof.tools = list(dict.fromkeys(prof.tools + ["run_code", "list_workspace", "read_workspace", "write_file", "share_file"]))
+        if not prof.use_agent:
+            prof.use_agent = True
+            prof.limits = {**prof.limits, "max_steps": max(4, int(prof.limits.get("max_steps", 1))),
+                           "max_tool_calls": max(4, int(prof.limits.get("max_tool_calls", 0) or 0))}
+
     def media_tools(self) -> list[str]:
         return [f"generate_{k}" for k in ("image", "video", "music") if self.manager.usable_models((k,))]
 
@@ -164,6 +174,11 @@ class ProfileEngine:
             tools.append("memory_search")
         if a.memory_op or t >= 0.6:
             tools.append("memory_save")
+        if sandbox and ("run_code" in tools or a.needs_files or a.needs_web):
+            # the per-conversation sandbox workspace: uploads, downloaded data and code outputs live there
+            tools += ["list_workspace", "read_workspace", "write_file", "share_file"]
+            if a.needs_web and self.web_enabled_fn():
+                tools.append("download_file")
         media = self.media_tools()
         if a.is_media:
             # Media requests go through the LLM, which calls the generate_* tool with a prompt and parameters.
@@ -183,8 +198,13 @@ class ProfileEngine:
         if any(x.startswith("generate_") for x in prof.tools):
             g = self.settings.generation
             max_seconds = max(max_seconds, g.video_timeout_seconds if "generate_video" in prof.tools else 900)
+        if a.deep_research:
+            prof.plan = prof.verify = True
+            steps = max(steps, 14)
+            max_seconds = max(max_seconds, 1200)
         prof.limits = {"max_steps": max(steps, 3) if a.is_media else steps, "max_seconds": max_seconds,
-                       "max_tool_calls": max(pol["max_tool_calls"], 2) if a.is_media else pol["max_tool_calls"],
+                       "max_tool_calls": max(pol["max_tool_calls"], 2) if a.is_media else
+                       max(pol["max_tool_calls"], 30) if a.deep_research else pol["max_tool_calls"],
                        "max_consecutive_failures": p.max_consecutive_failures, "max_total_tokens": p.max_total_tokens}
         prof.priority_class = "interactive" if t < 0.4 else "standard" if t < 0.75 else "batch"
         if prof.quality_pinned and prof.priority_class == "batch":
