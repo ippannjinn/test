@@ -258,3 +258,32 @@ def test_backup_and_restore(tmp_path, platform):
     db = Database(platform.settings.paths.db)
     assert db.scalar("SELECT COUNT(*) FROM users") == 1
     assert (platform.settings.paths.users / uid / "files").exists()
+
+
+def test_update_check_prefers_newest_of_api_and_cached_link(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from nextai.api import admin as adm
+
+    manifests = {"https://github.com/o/r/releases/download/v1.8.0/update-manifest.json": {"version": "1.8.0"},
+                 "https://github.com/o/r/releases/latest/download/update-manifest.json": {"version": "1.7.1"}}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.host == "api.github.com":
+            return httpx.Response(200, json=[{"draft": False, "prerelease": False, "assets": [
+                {"name": "update-manifest.json",
+                 "browser_download_url": "https://github.com/o/r/releases/download/v1.8.0/update-manifest.json"}]}])
+        key = str(req.url.copy_with(query=None))
+        return httpx.Response(200, json=manifests[key])
+
+    orig = httpx.AsyncClient
+
+    def client(*a, **k):
+        k["transport"] = httpx.MockTransport(handler)
+        return orig(*a, **k)
+
+    monkeypatch.setattr(adm.httpx, "AsyncClient", client)
+    m = asyncio.run(adm._latest_manifest("https://github.com/o/r/releases/latest/download/update-manifest.json"))
+    assert m["version"] == "1.8.0"

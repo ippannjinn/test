@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import platform as pyplatform
 import sys
 import threading
@@ -761,20 +762,56 @@ async def cleanup(ctx: Admin):
     return {"removed": removed}
 
 
+def _ver(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:4])
+
+
+async def _fetch_manifest(c: httpx.AsyncClient, url: str) -> dict | None:
+    r = await c.get(url, params={"t": int(now())}, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"})
+    r.raise_for_status()
+    return r.json()
+
+
+async def _latest_manifest(url: str) -> dict:
+    """The newest manifest. GitHub's .../releases/latest/download/... link can be served from a CDN cache for a
+    while after a release, so for GitHub URLs the release list is asked directly and the newest version wins."""
+    found: list[dict] = []
+    errors: list[str] = []
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers={"User-Agent": "NextAI-Platform"}) as c:
+        m = re.match(r"https://github\.com/([^/]+)/([^/]+)/releases/latest/download/([^/?#]+)", url)
+        if m:
+            owner, repo, name = m.groups()
+            try:
+                r = await c.get(f"https://api.github.com/repos/{owner}/{repo}/releases", params={"per_page": 5},
+                                headers={"Accept": "application/vnd.github+json"})
+                r.raise_for_status()
+                for rel in r.json():
+                    if rel.get("draft") or rel.get("prerelease"):
+                        continue
+                    asset = next((a for a in rel.get("assets", []) if a.get("name") == name), None)
+                    if asset:
+                        found.append(await _fetch_manifest(c, asset["browser_download_url"]))
+                        break
+            except (httpx.HTTPError, ValueError, KeyError) as e:
+                errors.append(f"GitHub API: {e}")
+        try:
+            found.append(await _fetch_manifest(c, url))
+        except (httpx.HTTPError, ValueError) as e:
+            errors.append(str(e))
+    found = [x for x in found if isinstance(x, dict) and x.get("version")]
+    if not found:
+        raise ApiError(502, "update_check_failed", "更新情報を取得できません: " + " / ".join(errors))
+    return max(found, key=lambda x: _ver(str(x["version"])))
+
+
 @router.get("/update/check")
 async def update_check(ctx: Admin):
     url = ctx.p.settings.server.update_manifest_url
     if not url:
         return {"configured": False, "current": ctx.p.version}
-    try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            m = r.json()
-    except (httpx.HTTPError, ValueError) as e:
-        raise ApiError(502, "update_check_failed", f"更新情報を取得できません: {e}")
+    m = await _latest_manifest(url)
     latest = str(m.get("version", ""))
-    newer = tuple(int(x) for x in latest.split(".") if x.isdigit()) > tuple(int(x) for x in ctx.p.version.split("."))
+    newer = _ver(latest) > _ver(ctx.p.version)
     return {"configured": True, "current": ctx.p.version, "latest": latest, "update_available": newer,
             "download_url": m.get("url"), "sha256": m.get("sha256"), "notes": m.get("notes", "")}
 
