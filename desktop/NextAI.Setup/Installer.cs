@@ -103,8 +103,7 @@ namespace NextAI.Setup
                 {
                     StepState?.Invoke(i, "fail");
                     Info("✗ " + ex.Message);
-                    if (ex.Message.IndexOf("Permission denied", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        ex.Message.Contains("アクセスが拒否") || ex.Message.Contains("PermissionError")) Diagnose();
+                    if (!(ex is StepFailed) || ex.Message.Contains("python.exe") || ex.Message.Contains("アクセス")) Diagnose();
                     throw new StepFailed($"{plan[i].title} に失敗しました:\n{ex.Message}");
                 }
                 StepState?.Invoke(i, Warnings.Count > warnBefore ? "warn" : "done");
@@ -214,28 +213,37 @@ namespace NextAI.Setup
         /// The service's own grant is re-applied at service registration.</summary>
         void RepairDataAccess()
         {
-            string[] Grant() => new[] { O.DataDir, "/grant", "*S-1-5-18:(OI)(CI)F", "/grant", "*S-1-5-32-544:(OI)(CI)F", "/T", "/C", "/Q" };
-            var r = Shell.Capture("icacls.exe", Grant());
-            if (r.code != 0)
+            // Root: make sure SYSTEM / Administrators have full control (inheritable).
+            var root = Shell.Capture("icacls.exe", O.DataDir, "/grant", "*S-1-5-18:(OI)(CI)F", "/grant", "*S-1-5-32-544:(OI)(CI)F", "/Q");
+            // Children: drop whatever explicit entries an earlier install / the service left (including deny entries)
+            // and inherit from the root. The service account's grant is re-applied at service registration.
+            string[] Reset() => new[] { Path.Combine(O.DataDir, "*"), "/reset", "/T", "/C", "/Q" };
+            var r = Shell.Capture("icacls.exe", Reset());
+            if (root.code != 0 || r.code != 0)
             {
                 Info("  データフォルダのアクセス権を修復しています (所有者を Administrators に変更)…");
                 Shell.Capture("takeown.exe", "/F", O.DataDir, "/R", "/A");
-                r = Shell.Capture("icacls.exe", Grant());
+                Shell.Capture("icacls.exe", O.DataDir, "/grant", "*S-1-5-18:(OI)(CI)F", "/grant", "*S-1-5-32-544:(OI)(CI)F", "/Q");
+                r = Shell.Capture("icacls.exe", Reset());
                 if (r.code != 0) Info("  icacls: " + Tail(r.output, 6));
             }
-            var cfg = Path.Combine(O.DataDir, "config.toml");
-            if (File.Exists(cfg))
+            var bad = new List<string>();
+            foreach (var name in new[] { "config.toml", "nextai.db", "nextai.db-wal", "nextai.db-shm" })
             {
-                bool CanOpen() { try { using (File.Open(cfg, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) { } return true; } catch { return false; } }
-                if (!CanOpen())
-                {
-                    // e.g. an explicit deny entry: reset the file's ACL to what the data folder grants.
-                    Info($"  ⚠ {cfg} を開けないためアクセス権をリセットします");
-                    Shell.Capture("icacls.exe", cfg, "/reset", "/Q");
-                    try { File.SetAttributes(cfg, FileAttributes.Normal); } catch { }
-                    if (!CanOpen()) Diagnose(cfg);
-                }
+                var p = Path.Combine(O.DataDir, name);
+                if (!File.Exists(p)) continue;
+                try { File.SetAttributes(p, FileAttributes.Normal); } catch { }
+                try { using (File.Open(p, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete)) { } }
+                catch (Exception ex) { bad.Add(p); Info($"  ⚠ {p} を開けません: {ex.Message}"); }
             }
+            try
+            {
+                var probe = Path.Combine(O.DataDir, "tmp", "setup-probe.tmp");
+                File.WriteAllText(probe, "ok");
+                File.Delete(probe);
+            }
+            catch (Exception ex) { bad.Add(O.DataDir); Info($"  ⚠ データフォルダに書き込めません: {ex.Message}"); }
+            if (bad.Count > 0) Diagnose(bad[0]);
         }
 
         static string Tail(string s, int lines) => string.Join("\n", (s ?? "").Split('\n').Reverse().Take(lines).Reverse()).Trim();

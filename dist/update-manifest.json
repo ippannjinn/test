@@ -1,8 +1,8 @@
 {
-  "version": "1.3.3",
+  "version": "1.3.4",
   "file": "NextAI-Platform-Setup.exe",
   "size": 460800,
-  "sha256": "b960dc79010e5dea921fba2432da94abfb6a3dddbaae11d7f6acb908ed154d19",
-  "url": "https://github.com/ippannjinn/test/releases/download/v1.3.3/NextAI-Platform-Setup.exe",
+  "sha256": "74f60881619017078f40a0136f62964263b1a5ab387807d67b43996cd116409d",
+  "url": "https://github.com/ippannjinn/test/releases/download/v1.3.4/NextAI-Platform-Setup.exe",
   "notes": "\u7ba1\u7406\u30b3\u30f3\u30bd\u30fc\u30eb\u304b\u3089\u30ef\u30f3\u30af\u30ea\u30c3\u30af\u3067\u66f4\u65b0\u3067\u304d\u307e\u3059 (\u30c7\u30fc\u30bf\u30fb\u8a2d\u5b9a\u30fb\u30e2\u30c7\u30eb\u306f\u4fdd\u6301)"
 }

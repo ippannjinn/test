@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -21,7 +22,14 @@ class Database:
         self._all_lock = threading.Lock()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.path), timeout=30, isolation_level=None, check_same_thread=False)
+        try:
+            conn = sqlite3.connect(str(self.path), timeout=30, isolation_level=None, check_same_thread=False)
+        except sqlite3.OperationalError as e:
+            d = self.path.parent
+            raise sqlite3.OperationalError(
+                f"{e}: {self.path} (exists={self.path.exists()}, dir_exists={d.exists()}, "
+                f"readable={os.access(self.path, os.R_OK)}, writable={os.access(self.path, os.W_OK)}, "
+                f"dir_writable={os.access(d, os.W_OK)})") from e
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
