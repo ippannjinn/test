@@ -427,8 +427,9 @@ class AuthService:
         bad = [x for x in scopes if x not in TOKEN_SCOPES]
         if bad or not scopes:
             raise AuthError("invalid_scope", f"スコープが不正です: {bad or scopes}", 400)
-        if not 0 < days <= 90:
-            raise AuthError("invalid_value", "有効期限は1〜90日で指定してください", 400)
+        max_days = 90 if "debug" in scopes else self.settings.api.key_max_days
+        if not 0 < days <= max_days:
+            raise AuthError("invalid_value", f"有効期限は{max_days}日以内で指定してください", 400)
         token, tid, ts = API_TOKEN_PREFIX + new_token(32), new_id(), now()
         self.db.execute(
             "INSERT INTO api_tokens(id, user_id, name, token_hash, scopes, created_at, created_by, expires_at)"
@@ -454,22 +455,42 @@ class AuthService:
         row["scopes"] = row["scopes"].split(",")
         return user, row
 
-    def list_api_tokens(self) -> list[dict]:
+    def list_api_tokens(self, user_id: str | None = None) -> list[dict]:
         ts = now()
-        rows = self.db.query("SELECT t.id, t.name, t.scopes, t.created_at, t.created_by, t.expires_at, t.last_used_at,"
-                             " t.last_ip, t.revoked_at, t.revoke_reason, u.username FROM api_tokens t"
-                             " JOIN users u ON u.id=t.user_id ORDER BY t.created_at DESC")
+        sql = ("SELECT t.id, t.name, t.scopes, t.created_at, t.created_by, t.expires_at, t.last_used_at,"
+               " t.last_ip, t.revoked_at, t.revoke_reason, u.username FROM api_tokens t JOIN users u ON u.id=t.user_id")
+        params: tuple = ()
+        if user_id:
+            sql += " WHERE t.user_id=?"
+            params = (user_id,)
+        rows = self.db.query(sql + " ORDER BY t.created_at DESC", params)
         for r in rows:
             r["scopes"] = r["scopes"].split(",")
             r["status"] = "revoked" if r["revoked_at"] else "expired" if r["expires_at"] < ts else "active"
         return rows
 
-    def revoke_api_token(self, token_id: str, reason: str, *, actor: dict | None = None, ip: str | None = None) -> bool:
-        ok = self.db.execute("UPDATE api_tokens SET revoked_at=?, revoke_reason=? WHERE id=? AND revoked_at IS NULL",
-                             (now(), reason, token_id)).rowcount > 0
+    def revoke_api_token(self, token_id: str, reason: str, *, actor: dict | None = None, ip: str | None = None,
+                         user_id: str | None = None) -> bool:
+        sql = "UPDATE api_tokens SET revoked_at=?, revoke_reason=? WHERE id=? AND revoked_at IS NULL"
+        params: tuple = (now(), reason, token_id)
+        if user_id:
+            sql += " AND user_id=?"
+            params += (user_id,)
+        ok = self.db.execute(sql, params).rowcount > 0
         if ok:
             self.audit.record("token.revoke", actor=actor, target=token_id, ip=ip, reason=reason)
         return ok
+
+    def create_personal_api_key(self, user: dict, *, name: str, days: float, ip: str | None) -> tuple[str, dict]:
+        a = self.settings.api
+        if not a.enabled or not a.member_keys:
+            raise AuthError("api_disabled", "APIキーの発行は管理者により無効化されています", 403)
+        active = int(self.db.scalar("SELECT COUNT(*) FROM api_tokens WHERE user_id=? AND revoked_at IS NULL AND expires_at>?",
+                                    (user["id"], now())) or 0)
+        if active >= a.max_keys_per_user:
+            raise AuthError("too_many_keys", f"有効なAPIキーは{a.max_keys_per_user}個までです。不要なキーを失効してください", 409)
+        return self.issue_api_token(user, scopes=["openai"], days=days, name=(name or "API").strip()[:60] or "API",
+                                    actor=user, ip=ip)
 
     def revoke_user_tokens(self, user_id: str, reason: str) -> int:
         return self.db.execute("UPDATE api_tokens SET revoked_at=?, revoke_reason=? WHERE user_id=? AND revoked_at IS NULL",
@@ -491,7 +512,7 @@ class AuthService:
             password = self.reset_password(user["id"], None, must_change=False, actor=actor, ip=ip)
         self.db.execute("UPDATE users SET is_agent=1 WHERE id=?", (user["id"],))
         self.revoke_user_tokens(user["id"], "rotated")
-        scopes = ["member", "debug"] if debug else ["member"]
+        scopes = ["member", "debug", "openai"] if debug else ["member", "openai"]
         token, row = self.issue_api_token(self.get_user(user["id"]), scopes=scopes, days=days, name="Claude Code",
                                           actor=actor, ip=ip)
         return {"username": AGENT_USERNAME, "password": password, "token": token, "token_id": row["id"],
@@ -513,7 +534,7 @@ class AuthService:
 
 
 API_TOKEN_PREFIX = "nxt_"
-TOKEN_SCOPES = ("member", "debug")
+TOKEN_SCOPES = ("member", "debug", "openai")
 AGENT_USERNAME = "claude"
 
 

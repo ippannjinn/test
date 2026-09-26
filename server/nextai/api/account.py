@@ -26,6 +26,11 @@ class RenameBody(BaseModel):
     name: str = Field(max_length=60)
 
 
+class ApiKeyBody(BaseModel):
+    name: str = Field(default="API", max_length=60)
+    days: float = Field(default=90, gt=0, le=3650)
+
+
 def usage(p, user: dict) -> dict:
     row = p.db.one("SELECT * FROM usage_daily WHERE user_id=? AND day=?", (user["id"], day_key())) or {}
     return {"storage_used_mb": round(p.files.usage_bytes(user["id"]) / 2**20, 1),
@@ -137,3 +142,37 @@ def revoke_others(ctx: User):
 @router.get("/usage")
 def get_usage(ctx: User):
     return usage(ctx.p, ctx.user)
+
+
+def _no_token(ctx: Ctx) -> None:
+    if ctx.auth == "token":
+        raise ApiError(403, "token_forbidden", "APIキーの管理はブラウザからログインして行ってください")
+
+
+@router.get("/api-keys")
+def list_api_keys(ctx: User):
+    _no_token(ctx)
+    a = ctx.p.settings.api
+    keys = [k for k in ctx.p.auth.list_api_tokens(ctx.uid) if k["scopes"] == ["openai"]]
+    return {"keys": keys, "enabled": bool(a.enabled and a.member_keys), "max_days": a.key_max_days,
+            "max_keys": a.max_keys_per_user}
+
+
+@router.post("/api-keys")
+def create_api_key(body: ApiKeyBody, ctx: User):
+    _no_token(ctx)
+    try:
+        token, row = ctx.p.auth.create_personal_api_key(ctx.user, name=body.name, days=body.days, ip=ctx.ip)
+    except AuthError as e:
+        raise ApiError(e.status, e.code, e.message) from None
+    row.pop("token_hash", None)
+    row["scopes"] = row["scopes"].split(",")
+    return {"key": token, "token": row}
+
+
+@router.delete("/api-keys/{key_id}")
+def revoke_api_key(key_id: str, ctx: User):
+    _no_token(ctx)
+    if not ctx.p.auth.revoke_api_token(key_id, "user_revoked", actor=ctx.user, ip=ctx.ip, user_id=ctx.uid):
+        raise ApiError(404, "not_found", "APIキーが見つかりません")
+    return {"ok": True}

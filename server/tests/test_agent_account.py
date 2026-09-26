@@ -75,6 +75,6 @@ def test_cli_agent_account(tmp_path, settings):
     r = subprocess.run([sys.executable, "-m", "nextai", "--data-dir", str(settings.paths.data_dir), "agent-account",
                         "--days", "3", "--out", str(out)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
-    assert json.loads(r.stdout)["scopes"] == ["member", "debug"]
+    assert json.loads(r.stdout)["scopes"] == ["member", "debug", "openai"]
     env = out.read_text(encoding="utf-8")
     assert "NEXTAI_TOKEN=nxt_" in env and "NEXTAI_UI_USER=claude" in env

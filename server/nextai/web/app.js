@@ -598,10 +598,52 @@ async function viewSettings() {
           h("div", { class: "muted small" }, `${s.ip || ""} · 最終アクセス ${fmtTime(s.last_seen_at)}`)),
         s.current ? null : h("button", { class: "btn small danger", onclick: async () => { await api(`/api/account/sessions/${s.id}`, { method: "DELETE" }); viewSettings(); } }, "終了")))),
       h("div", { class: "row" }, h("div", { class: "spacer" }), h("button", { class: "btn small", onclick: async () => { const r = await api("/api/account/sessions/revoke-others", { method: "POST" }); toast(`${r.revoked}件のセッションを終了しました`); viewSettings(); } }, "他のセッションをすべて終了"))),
+    apiKeysCard(),
     h("div", { class: "card" }, h("h3", {}, "ログアウト"),
       h("div", { class: "row" }, h("button", { class: "btn", onclick: () => logout(false) }, "ログアウト"),
         h("button", { class: "btn danger", onclick: () => logout(true) }, "ログアウトしてこの端末の信頼を解除")),
       h("p", { class: "muted small" }, "証明書の警告が出る端末では ", h("a", { href: "/ca.crt" }, "CA証明書"), " をインストールしてください。")));
+}
+
+function apiKeysCard() {
+  const card = h("div", { class: "card" }, h("h3", {}, "APIキー (OpenAI互換)"), h("p", { class: "muted small" }, "読み込み中…"));
+  const render = (d, fresh) => {
+    const base = `${location.origin}/v1`;
+    const name = h("input", { class: "input", placeholder: "キーの名前 (例: 自作スクリプト)", maxlength: 60 });
+    const days = h("select", { class: "input" }, ...[30, 90, 180, 365].filter((n) => n <= d.max_days).map((n) => h("option", { value: n }, `${n}日`)));
+    days.value = String(Math.min(90, d.max_days));
+    const create = h("button", { class: "btn primary", onclick: async () => {
+      try {
+        const r = await api("/api/account/api-keys", { method: "POST", body: { name: name.value.trim() || "API", days: Number(days.value) } });
+        render(await api("/api/account/api-keys"), r.key);
+      } catch (e) { toast(e.message); }
+    } }, "新しいキーを発行");
+    const copyBtn = (text) => h("button", { class: "btn small", onclick: () => navigator.clipboard?.writeText(text).then(() => toast("コピーしました")) }, "コピー");
+    const kids = [h("h3", {}, "APIキー (OpenAI互換)"),
+      h("p", { class: "muted small" }, "OpenAI 互換の API として、既存のツールや自作プログラムからこの AI を使えます。model に \"auto\" を指定すると内容に合わせてモデルが自動で選ばれます。GPU の順番待ちと利用上限は Web 画面と共通です。"),
+      h("div", { class: "row small" }, h("span", {}, "Base URL: "), h("code", {}, base), copyBtn(base))];
+    if (!d.enabled) {
+      kids.push(h("p", { class: "muted small" }, "API キーの発行は管理者により無効化されています。"));
+    } else {
+      if (fresh) {
+        const box = h("input", { class: "input", value: fresh, readonly: true, onfocus: (e) => e.target.select() });
+        kids.push(h("div", { class: "notice keybox" }, h("div", { class: "small" }, "新しいキーです。この画面を閉じると二度と表示されません。安全な場所に保存してください。"),
+          h("div", { class: "row" }, box, copyBtn(fresh))));
+      }
+      kids.push(h("div", { class: "grid2" }, name, days), h("div", { class: "row" }, h("span", { class: "muted small" }, `有効なキーは${d.max_keys}個まで`), h("div", { class: "spacer" }), create));
+    }
+    kids.push(h("div", { class: "list" }, d.keys.length ? d.keys.map((k) => h("div", { class: "item" },
+      h("div", { class: "grow" }, h("div", { class: "title" }, k.name),
+        h("div", { class: "muted small" }, `作成 ${fmtTime(k.created_at)} · 期限 ${fmtTime(k.expires_at)} · 最終利用 ${fmtTime(k.last_used_at)} · ${{ active: "有効", revoked: "失効済み", expired: "期限切れ" }[k.status]}`)),
+      k.status === "active" ? h("button", { class: "btn small danger", onclick: async () => {
+        if (!confirmDanger(`APIキー「${k.name}」を失効させますか？このキーを使っているプログラムは使えなくなります。`)) return;
+        try { await api(`/api/account/api-keys/${k.id}`, { method: "DELETE" }); render(await api("/api/account/api-keys")); } catch (e) { toast(e.message); }
+      } }, "失効") : null))
+      : h("p", { class: "muted small" }, "発行済みのキーはありません")));
+    card.replaceChildren(...kids);
+  };
+  api("/api/account/api-keys").then((d) => render(d)).catch((e) => card.replaceChildren(h("h3", {}, "APIキー (OpenAI互換)"), h("p", { class: "error" }, e.message)));
+  return card;
 }
 
 boot();

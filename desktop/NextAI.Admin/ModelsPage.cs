@@ -254,6 +254,7 @@ namespace NextAI.Admin
             ("profile", "Dynamic Profile (Speed / Balanced / Autonomous の内部チューニング)"),
             ("scheduler", "GPUスケジューラ / キュー"), ("resources", "リソース管理 (VRAM/RAM/温度/ストレージ)"), ("models", "モデル / キャッシュ"),
             ("sandbox", "コードサンドボックス"), ("web", "Web検索 / ブラウジング"), ("generation", "画像・動画・音楽の生成制限"),
+            ("api", "OpenAI互換API / メンバーのAPIキー"),
             ("auth", "認証 / セッション / 信頼端末"), ("users", "新規メンバーの既定値"), ("storage", "ストレージ"), ("server", "サーバー (再起動が必要)"),
         };
 
@@ -266,6 +267,7 @@ namespace NextAI.Admin
             "コード実行は WASM (python.wasm) で隔離されます。ネットワーク・プロセス生成は不可、メモリ/時間/ディスク容量を制限します。",
             "SSRF対策として localhost・LAN・内部アドレスへのアクセスは常に遮断されます。search_provider: duckduckgo / searxng / brave。",
             "動画生成はローカルGPU向けに尺と解像度を制限しています。コストは生成クォータの消費量です。",
+            "enabled: /v1 (OpenAI互換API) 全体の有効/無効。member_keys: メンバーが設定画面で自分のAPIキーを発行できるか。key_max_days: キーの最長有効日数。max_keys_per_user: 1人あたりの有効キー数。max_tokens_cap: 1回の応答の最大トークン数。APIからの利用もGPUキュー・クォータ・レート制限の対象です。発行済みキーの一覧と失効は「メンバー」→「APIトークン」から。",
             "セッション・信頼端末の有効期限、ログイン試行制限などを設定します。",
             "新しく作成するメンバーの既定クォータです (個別の値はメンバー画面で変更)。",
             "一時ファイルやバックアップの保持設定です。",

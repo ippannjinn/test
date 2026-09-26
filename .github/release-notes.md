@@ -8,3 +8,11 @@
 - 改ざん確認: `NextAI-Platform-Setup.exe.sha256` と照合してください (`certutil -hashfile NextAI-Platform-Setup.exe SHA256`)。
 
 インストール後は管理コンソールの「サーバー」→「フル診断」で実機性能を計測してください。詳細は README / docs/DEPLOYMENT.md を参照。
+
+### 更新履歴
+
+- **1.3.0** — OpenAI 互換 API (`/v1/chat/completions`・`/v1/embeddings`・`/v1/models`) を追加。メンバーが設定画面から自分用の API キーを発行・失効できます。管理コンソールの「AI設定」→「OpenAI互換API」で有効/無効や上限を設定できます (docs/API.md)。
+- **1.2.0** — Claude Code 用のデバッグ専用アカウント (期限付き・読み取り専用の管理トークン)。
+- **1.1.0** — 管理コンソールからのワンクリック更新。
+
+既にインストール済みの場合は、管理コンソールの「アップデート確認 / 更新」から更新できます (データと設定は保持されます)。

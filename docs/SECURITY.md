@@ -18,7 +18,8 @@
 | サービスアカウントの権限 | `NT SERVICE\NextAIServer` 仮想アカウントで実行 (LocalSystem は使わない) | `Installer.cs` |
 | サプライチェーン | Python 依存はハッシュ固定 (`--require-hashes`)、uv は PyPI の SHA-256 で検証、モデルは HF LFS の SHA-256 で検証、GitHub リリースは digest がある場合に検証 | `requirements.lock`, `downloader.py` |
 | プロンプトインジェクション | ツールの結果を外部データとして囲み、システムプロンプトでその中の指示に従わないよう明示 | `runners/chat.py`, `agent.py` |
-| 自動化トークン (Claude 等) | `nxt_` 付きランダムトークンをハッシュのみ保存、スコープ (member / debug)、debug は管理APIの読み取りと診断実行のみ、localhost 限定、期限付き、再発行で旧トークン失効、アカウント停止・パスワードリセットで失効 | `auth/deps.py`, `service.py` |
+| 自動化トークン (Claude 等) | `nxt_` 付きランダムトークンをハッシュのみ保存、スコープ (member / debug / openai)、debug は管理APIの読み取りと診断実行のみ、localhost 限定、期限付き、再発行で旧トークン失効、アカウント停止・パスワードリセットで失効 | `auth/deps.py`, `service.py` |
+| OpenAI 互換 API のキー | メンバーが自分で発行する `openai` スコープのみのキー (Web 用 API・管理 API・キー管理には使えない)、Cookie では `/v1` を使えない (CSRF の対象外にしない)、期限必須・1人あたりの個数上限、管理者が全体を無効化・個別に失効可能、API 経由でも GPU キュー・レート制限・同時実行数の制限を適用 | `api/openai.py`, `api/account.py` |
 | 監査 | ログイン成功・失敗、アカウント操作、端末の登録・解除・再利用の検知、設定変更、バックアップ・復元、モデル操作を `audit_log` に記録 | `audit.py` |
 
 ## 既知の制限

@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__
-from .api import account, admin, auth, chat, files, generate, jobs, memory, system
+from .api import account, admin, auth, chat, files, generate, jobs, memory, openai, system
 from .auth.deps import ApiError
 from .auth.service import AuthError
 from .jobs import AdmissionError
@@ -29,6 +29,7 @@ CSP = ("default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; 
        "script-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; "
        "base-uri 'none'; form-action 'self'; manifest-src 'self'")
 UPLOAD_PATHS = ("/api/files", "/api/account/avatar")
+LARGE_JSON_PATHS = ("/v1/chat/completions",)  # may carry base64 images
 
 
 class SecurityMiddleware:
@@ -43,6 +44,8 @@ class SecurityMiddleware:
         path = scope.get("path", "")
         s = self.p.settings.server
         limit = s.max_upload_mb * 2**20 + 65536 if path in UPLOAD_PATHS else s.max_json_kb * 1024
+        if path in LARGE_JSON_PATHS:
+            limit = max(limit, 24 * 2**20)
         headers = dict(scope.get("headers") or [])
         cl = headers.get(b"content-length")
         if cl is not None and cl.isdigit() and int(cl) > limit:
@@ -61,7 +64,7 @@ class SecurityMiddleware:
                     raise _TooLarge()
             return msg
 
-        is_api = path.startswith("/api/")
+        is_api = path.startswith(("/api/", "/v1/"))
         tls = s.tls
 
         async def send_wrapper(message):
@@ -167,7 +170,7 @@ def create_app(platform: Platform, manage_lifecycle: bool = True) -> FastAPI:
         return _err(500, "internal_error", "サーバー内部エラーが発生しました")
 
     for r in (system.router, auth.router, account.router, chat.router, jobs.router, files.router, generate.router,
-              memory.router, admin.router):
+              memory.router, admin.router, openai.router):
         app.include_router(r)
 
     web_dir = Path(str(resources.files("nextai").joinpath("web")))

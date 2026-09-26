@@ -40,6 +40,7 @@ dotnet test desktop/NextAI.Common.Tests          # C# 共通ロジック
    python tools/nextai_debug.py diagnose [--full]   # PASS/WARN/FAIL。--full は実機ベンチ (数分, 利用者を待たせる)
    python tools/nextai_debug.py queue | models | workers | settings | audit
    python tools/nextai_debug.py chat "テスト" --mode fast   # claude アカウントとして実際に推論を流す
+   python tools/nextai_debug.py v1 "テスト" [--stream]      # OpenAI互換API (/v1) 経由で推論を流す
    ```
    Python が無い場合は curl.exe で同等に呼べる:
    `curl.exe --ssl-no-revoke --cacert "%NEXTAI_CA%" -H "Authorization: Bearer %NEXTAI_TOKEN%" %NEXTAI_URL%/api/admin/dashboard`

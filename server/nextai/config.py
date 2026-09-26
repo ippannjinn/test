@@ -138,6 +138,13 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "tmp_max_age_hours": 24,
         "keep_backups": 7,
     },
+    "api": {
+        "enabled": True,
+        "member_keys": True,
+        "key_max_days": 365,
+        "max_keys_per_user": 10,
+        "max_tokens_cap": 8192,
+    },
     "users": {
         "default_generation_quota": 100,
         "default_concurrent_jobs": 2,

@@ -190,3 +190,11 @@ def test_platform_real_mode_end_to_end(tmp_path):
         assert conv["messages"][-1]["meta"]["model_id"] == "qwen3-4b-instruct"
         caps = c.get("/api/status").json()["capabilities"]
         assert caps["chat"] and not caps["image"]
+        # OpenAI-compatible API against the real (llama-server) backend
+        key = c.post("/api/account/api-keys", json={"name": "t"}).json()["key"]
+        h = {"Authorization": f"Bearer {key}"}
+        assert [m["id"] for m in c.get("/v1/models", headers=h).json()["data"]] == ["auto", "qwen3-4b-instruct"]
+        r = c.post("/v1/chat/completions", headers=h, json={"messages": [{"role": "user", "content": "hi"}]})
+        assert r.status_code == 200 and r.json()["choices"][0]["message"]["content"] == "こんにちは、世界"
+        r = c.post("/v1/chat/completions", headers=h, json={"messages": [{"role": "user", "content": "hi"}], "stream": True})
+        assert "こんにちは" in r.text and r.text.rstrip().endswith("data: [DONE]")

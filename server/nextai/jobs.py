@@ -129,6 +129,22 @@ class JobManager:
             self._persist(job)
             asyncio.get_running_loop().call_later(900, self.jobs.pop, job.id, None)
 
+    def begin_inline(self, user: dict, kind: str, request: dict) -> Job:
+        """A job driven by the caller (e.g. an OpenAI-compatible request) instead of a background task."""
+        job = self.create(user, kind, request)
+        job.status, job.started_at = "running", now()
+        self.p.db.execute("UPDATE jobs SET status=?, started_at=? WHERE id=?", ("running", job.started_at, job.id))
+        return job
+
+    def finish_inline(self, job: Job, status: str, error: str | None = None, result: dict | None = None) -> None:
+        job.status, job.error, job.result, job.finished_at = status, error, result or {}, now()
+        job.emit("done", status=status, error=error, result=job.result)
+        self._persist(job)
+        try:
+            asyncio.get_running_loop().call_later(900, self.jobs.pop, job.id, None)
+        except RuntimeError:
+            self.jobs.pop(job.id, None)
+
     def _persist(self, job: Job) -> None:
         dur = (job.finished_at or now()) - (job.started_at or job.created_at)
         self.p.db.execute("UPDATE jobs SET status=?, finished_at=?, profile=?, result=?, error=?, gpu_seconds=? WHERE id=?",

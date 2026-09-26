@@ -7,6 +7,7 @@ import platform as pyplatform
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -285,13 +286,20 @@ class AgentBody(BaseModel):
     debug: bool = True
 
 
+def _client_ca_path(p) -> Path:
+    """The data folder is ACL-restricted to the service, so prefer the installer's readable copy
+    (<InstallDir>/ca.crt, next to app/server/nextai)."""
+    installed = Path(__file__).resolve().parents[4] / "ca.crt"
+    return installed if installed.exists() else p.settings.paths.certs / "ca.crt"
+
+
 def agent_env(p, res: dict) -> str:
     s = p.settings.server
     return "\n".join([
         "# NextAI Platform - Claude 専用アカウント (Claude Code 用)",
         "# このファイルは秘密情報です。共有・コミットしないでください。",
         f"NEXTAI_URL={'https' if s.tls else 'http'}://127.0.0.1:{s.port}",
-        "NEXTAI_CA=C:\\Program Files\\NextAI\\ca.crt",
+        f"NEXTAI_CA={_client_ca_path(p)}",
         f"NEXTAI_TOKEN={res['token']}",
         f"NEXTAI_TOKEN_SCOPES={','.join(res['scopes'])}",
         f"NEXTAI_UI_USER={res['username']}",

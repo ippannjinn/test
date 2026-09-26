@@ -44,6 +44,10 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .small { font-size: 13px; }
 .error { color: var(--danger); font-size: 14px; min-height: 1.4em; }
 .notice { background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+.keybox { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; border: 1px solid var(--accent); }
+.keybox .row { flex-wrap: nowrap; }
+.keybox .input { flex: 1; width: auto; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.card code { font-family: ui-monospace, Consolas, monospace; word-break: break-all; background: var(--accent-soft); padding: 1px 6px; border-radius: 6px; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .spacer { flex: 1; }

@@ -12,6 +12,7 @@ of the same name override the file. Standard library only.
   python tools/nextai_debug.py queue | models | users | workers | settings
   python tools/nextai_debug.py diagnose [--full]
   python tools/nextai_debug.py chat "質問" [--mode auto|fast|quality]
+  python tools/nextai_debug.py v1 "質問" [--model auto] [--stream]   (OpenAI互換API /v1 の確認)
   python tools/nextai_debug.py get /api/admin/...        (any read-only endpoint)
 """
 from __future__ import annotations
@@ -139,6 +140,30 @@ def cmd_chat(a) -> None:
                     return
 
 
+def cmd_v1(a) -> None:
+    body = {"model": a.model, "messages": [{"role": "user", "content": a.text}], "stream": a.stream}
+    if not a.stream:
+        r = call("POST", "/v1/chat/completions", body, timeout=a.timeout)
+        print(r["choices"][0]["message"].get("content") or json.dumps(r["choices"][0]["message"], ensure_ascii=False))
+        print(f"\n<model={r['model']} usage={r['usage']} profile={r.get('nextai')}>")
+        return
+    url = ENV["NEXTAI_URL"].rstrip("/") + "/v1/chat/completions"
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
+        "Authorization": f"Bearer {ENV['NEXTAI_TOKEN']}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, context=_ctx(), timeout=a.timeout) as resp:
+        for raw in resp:
+            line = raw.decode("utf-8").strip()
+            if line == "data: [DONE]":
+                print()
+                return
+            if line.startswith("data: "):
+                ch = json.loads(line[6:])
+                if "error" in ch:
+                    sys.exit(f"\nerror: {ch['error']}")
+                for c in ch.get("choices") or []:
+                    print(c["delta"].get("content") or "", end="", flush=True)
+
+
 SIMPLE = {"health": "/api/health", "queue": "/api/admin/queue", "models": "/api/admin/models", "users": "/api/admin/users",
           "workers": "/api/admin/workers", "settings": "/api/admin/settings", "tokens": "/api/admin/tokens",
           "status": "/api/status", "info": "/api/admin/server/info"}
@@ -162,6 +187,11 @@ def main() -> None:
     p.add_argument("text")
     p.add_argument("--mode", default="auto", choices=["auto", "fast", "quality"])
     p.add_argument("--timeout", type=float, default=600)
+    p = sub.add_parser("v1")
+    p.add_argument("text")
+    p.add_argument("--model", default="auto")
+    p.add_argument("--stream", action="store_true")
+    p.add_argument("--timeout", type=float, default=600)
     p = sub.add_parser("get")
     p.add_argument("path")
     a = ap.parse_args()
@@ -171,7 +201,8 @@ def main() -> None:
     elif a.cmd == "get":
         show(call("GET", a.path))
     else:
-        {"dashboard": cmd_dashboard, "logs": cmd_logs, "audit": cmd_audit, "diagnose": cmd_diagnose, "chat": cmd_chat}[a.cmd](a)
+        {"dashboard": cmd_dashboard, "logs": cmd_logs, "audit": cmd_audit, "diagnose": cmd_diagnose, "chat": cmd_chat,
+         "v1": cmd_v1}[a.cmd](a)
 
 
 if __name__ == "__main__":
