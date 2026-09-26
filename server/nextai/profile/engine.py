@@ -101,10 +101,10 @@ class ProfileEngine:
         pinned = a.explicit_mode == "quality"
         if a.explicit_mode == "fast":
             t = min(t, 0.2)
-            reasons.append("速度優先の指定")
+            reasons.append("速度特化の指定")
         if pinned:
-            t = max(t, 0.75)
-            reasons.append("品質優先の指定 (品質を落とさず待機)")
+            t = max(t, 0.9 if a.autonomous else 0.75)
+            reasons.append("自律特化の指定" if a.autonomous else "精度特化の指定 (品質を落とさず待機)")
         floors = {"project": 0.78, "research": 0.45, "coding": 0.35, "file_analysis": 0.4, "reasoning": 0.45}
         if a.explicit_mode != "fast" and a.task_type in floors:
             t = max(t, floors[a.task_type])
@@ -181,6 +181,12 @@ class ProfileEngine:
             tools += ["list_workspace", "read_workspace", "write_file", "share_file"]
             if a.needs_web and self.web_enabled_fn():
                 tools.append("download_file")
+        if a.autonomous:
+            if web:
+                tools += ["web_research", "web_search", "web_fetch", "download_file"]
+            if sandbox:
+                tools += ["run_code", "list_workspace", "read_workspace", "write_file", "share_file"]
+            tools += ["memory_search"]
         media = self.media_tools()
         if a.is_media:
             # Media requests go through the LLM, which calls the generate_* tool with a prompt and parameters.
@@ -200,13 +206,13 @@ class ProfileEngine:
         if any(x.startswith("generate_") for x in prof.tools):
             g = self.settings.generation
             max_seconds = max(max_seconds, g.video_timeout_seconds if "generate_video" in prof.tools else 900)
-        if a.deep_research:
-            prof.plan = prof.verify = True
-            steps = max(steps, 14)
+        if a.deep_research or a.autonomous:
+            prof.use_agent = prof.plan = prof.verify = True
+            steps = max(steps, 16)
             max_seconds = max(max_seconds, 1200)
         prof.limits = {"max_steps": max(steps, 3) if a.is_media else steps, "max_seconds": max_seconds,
                        "max_tool_calls": max(pol["max_tool_calls"], 2) if a.is_media else
-                       max(pol["max_tool_calls"], 30) if a.deep_research else pol["max_tool_calls"],
+                       max(pol["max_tool_calls"], 30) if (a.deep_research or a.autonomous) else pol["max_tool_calls"],
                        "max_consecutive_failures": p.max_consecutive_failures, "max_total_tokens": p.max_total_tokens}
         prof.priority_class = "interactive" if t < 0.4 else "standard" if t < 0.75 else "batch"
         if prof.quality_pinned and prof.priority_class == "batch":

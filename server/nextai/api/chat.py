@@ -20,12 +20,12 @@ class ConvBody(BaseModel):
 class MessageBody(BaseModel):
     content: str = Field(min_length=1, max_length=40000)
     attachments: list[str] = Field(default_factory=list, max_length=10)
-    mode: Literal["auto", "fast", "quality", "deep"] = "auto"
+    mode: Literal["auto", "fast", "quality", "autonomous", "deep"] = "auto"
     replace_from: str | None = Field(default=None, max_length=64)  # edit: drop this message and everything after
 
 
 class RegenBody(BaseModel):
-    mode: Literal["auto", "fast", "quality", "deep"] = "auto"
+    mode: Literal["auto", "fast", "quality", "autonomous", "deep"] = "auto"
 
 
 def _truncate_from(ctx: Ctx, conv_id: str, message_id: str) -> None:

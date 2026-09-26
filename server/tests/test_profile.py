@@ -155,3 +155,18 @@ def test_moe_never_plans_beyond_free_ram():
     assert ok and ok.est_ram_mb <= 16000
     # the old optimistic mmap behaviour is still available as an explicit setting
     assert plan_llm(spec, 18600, vram_budget_mb=8700, ram_budget_mb=4000, ram_overcommit=0.5) is not None
+
+
+def test_three_modes(engine):
+    eng, *_ = engine
+    fast = eng.decide(analyze("量子コンピュータの仕組みを説明して", mode="fast"))
+    acc = eng.decide(analyze("量子コンピュータの仕組みを説明して", mode="quality"))
+    auto_q = analyze("量子コンピュータの仕組みを説明して", mode="autonomous")
+    aut = eng.decide(auto_q)
+    assert fast.tuning <= 0.2 < acc.tuning and acc.tuning >= 0.75 and aut.tuning >= 0.9
+    assert not fast.plan and aut.plan and aut.verify and aut.limits["max_steps"] >= 16
+    assert auto_q.deep_research and "web_research" in aut.tools
+    code = analyze("Pythonでクイックソートを実装してテストして", mode="autonomous")
+    prof = eng.decide(code)
+    assert code.autonomous and not code.deep_research and code.task_type == "coding"
+    assert "run_code" in prof.tools and prof.use_agent and prof.plan

@@ -130,6 +130,12 @@ RESEARCH_CONTEXT = """以下は、この質問についてWebを検索して集�
 {evidence}
 </search_results>"""
 
+AUTONOMOUS_RULES = """自律特化モードです。利用者に途中で確認せず、最後までやり切ってください。
+1. 目的と完了条件を明確にして計画を立てる。
+2. 必要な情報は web_research で調べ、コードは run_code で実際に動かし、ファイルは作業ディレクトリに作る。
+3. 結果を自分で検証し、問題があれば直して再検証する。
+4. 最後に、やったこと・成果物・検証結果・残った課題をまとめる。"""
+
 RESEARCH_RULES = """Deep Research モードです。十分に調べてから、根拠のあるレポートを書いてください。
 1. 調べる観点を3〜6個に分けて計画し、web_search で複数の情報源を探し、重要なページは web_fetch で本文を読む。
 2. 数値データや表は download_file / web_fetch(save_as) でワークスペースに保存し、必要なら run_code で集計・グラフ化する。
@@ -243,6 +249,8 @@ async def run_chat(p: Any, job: Job) -> dict:
             job.emit("memory_used", items=used_memories)
     if analysis.deep_research:
         sys_parts.append(RESEARCH_RULES)
+    elif analysis.autonomous:
+        sys_parts.append(AUTONOMOUS_RULES)
     if profile.use_agent:
         sys_parts.append(TOOL_RULES)
     if any(t.startswith("generate_") for t in profile.tools):

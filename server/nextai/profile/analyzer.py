@@ -64,6 +64,7 @@ class TaskAnalysis:
     reasons: list[str] = field(default_factory=list)
     text: str = ""
     deep_research: bool = False
+    autonomous: bool = False
 
     @property
     def capability(self) -> str:
@@ -170,10 +171,14 @@ def analyze(text: str, *, attachments: list[dict] | None = None, history_turns: 
         c = 0.05
         a.reasons.append("短い雑談")
     a.complexity = round(clamp(c, 0.0, 1.0), 3)
-    if mode == "deep" and not a.is_media:
-        # Deep Research: multi-step web research with a cited report (quality-pinned, plans and verifies)
-        a.deep_research = True
-        a.task_type, a.needs_web, a.multi_step, a.explicit_mode = "research", True, True, "quality"
-        a.complexity = max(a.complexity, 0.85)
-        a.reasons.append("Deep Research モード")
+    if mode in ("autonomous", "deep") and not a.is_media:
+        # 自律特化: plan → research / execute → verify on its own, with long limits. For questions (not coding or
+        # projects) that means a cited research report (Deep Research).
+        a.autonomous, a.multi_step, a.explicit_mode = True, True, "quality"
+        a.complexity = max(a.complexity, 0.9)
+        if a.task_type in ("chat", "research", "summarize", "writing", "reasoning") or mode == "deep":
+            a.deep_research, a.needs_web = True, True
+            if a.task_type == "chat" or mode == "deep":
+                a.task_type = "research"
+        a.reasons.append("自律特化モード")
     return a

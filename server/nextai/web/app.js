@@ -151,7 +151,8 @@ async function tryRefresh() {
 function applySession(d) {
   S.user = d.user; S.csrf = d.csrf_token; S.server = d.server; S.trusted = d.trusted_device;
   S.prefs = Object.assign({ theme: "auto", enter_send: !matchMedia("(pointer: coarse)").matches }, d.user?.ui_prefs || {});
-  S.mode = store.get("nextai.mode", "auto");
+  S.mode = { auto: "quality", deep: "autonomous" }[store.get("nextai.mode", "quality")] || store.get("nextai.mode", "quality");
+  if (!["fast", "quality", "autonomous"].includes(S.mode)) S.mode = "quality";
   applyPrefs();
 }
 function applyPrefs() {
@@ -387,10 +388,9 @@ async function deleteConv(c) {
 // ---------------------------------------------------------------- chat
 let chat;
 const MODES = [
-  ["auto", "自動", "内容と混雑状況から最適なモデルと推論の深さを選びます", "spark"],
-  ["fast", "速さ優先", "軽いモデルで素早く答えます", "bolt"],
-  ["quality", "品質優先", "混雑していても高性能な設定で待って答えます", "gem"],
-  ["deep", "じっくり調査", "Web を深く調べ、出典付きのレポートを作ります (数分かかります)", "globe"],
+  ["fast", "速度特化", "軽いモデルで素早く答えます。必要なときだけ調べます", "bolt"],
+  ["quality", "精度特化", "高性能なモデルでよく考え、調べて確かめてから答えます", "gem"],
+  ["autonomous", "自律特化", "計画 → 調査・実行 → 検証を自分で繰り返し、最後までやり切ります (数分かかることがあります)", "spark"],
 ];
 function newChat() { S.convId = null; S.attach = []; if (S.view === "chat") openChat(null); }
 
