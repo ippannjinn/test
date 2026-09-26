@@ -539,10 +539,15 @@ namespace NextAI.Setup
                     account = null;
                 }
                 // Data dir: SYSTEM + Administrators full, service account modify, no access for other users.
+                // Set the protected ACL on the root only, then make every child inherit it. (Applying
+                // "/inheritance:r /grant:r ...(OI)(CI)" with /T to files leaves them with an EMPTY DACL:
+                // files can't take (OI)(CI) grants, so nobody - not even the service or setup - could open them.)
                 var grants = new List<string> { O.DataDir, "/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F" };
                 if (account != null) { grants.Add("/grant:r"); grants.Add(account + ":(OI)(CI)M"); }
-                grants.Add("/T"); grants.Add("/C"); grants.Add("/Q");
-                if (Shell.Run("icacls.exe", grants.ToArray()) != 0) Warnings.Add("データフォルダのアクセス権設定に一部失敗しました");
+                grants.Add("/Q");
+                var ok = Shell.Run("icacls.exe", grants.ToArray()) == 0;
+                ok &= Shell.Run("icacls.exe", Path.Combine(O.DataDir, "*"), "/reset", "/T", "/C", "/Q") == 0;
+                if (!ok) Warnings.Add("データフォルダのアクセス権設定に一部失敗しました");
                 Info($"  サービス {InstallInfo.ServiceName} を登録しました (自動起動 / 異常終了時は自動再起動 / 実行アカウント: {account ?? "LocalSystem"})");
             }, ct);
         }
