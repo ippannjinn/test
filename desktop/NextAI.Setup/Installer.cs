@@ -53,7 +53,7 @@ namespace NextAI.Setup
         readonly List<(string title, Func<CancellationToken, Task> run)> plan = new List<(string, Func<CancellationToken, Task>)>();
 
         string Runtime => Path.Combine(O.DataDir, "runtime");
-        bool reacquiredUv;
+        bool uvOk = true;
         string Uv => Path.Combine(Runtime, "uv", "uv.exe");
         string Venv => Path.Combine(Runtime, "venv");
         string Python => Path.Combine(Venv, "Scripts", "python.exe");
@@ -109,15 +109,19 @@ namespace NextAI.Setup
             }
         }
 
-        Dictionary<string, string> Env() => new Dictionary<string, string>
+        Dictionary<string, string> Env()
         {
-            ["PYTHONPATH"] = ServerDir,
-            ["UV_PYTHON_INSTALL_DIR"] = Path.Combine(Runtime, "python"),
-            ["UV_CACHE_DIR"] = Path.Combine(Runtime, "uv-cache"),
-            ["UV_NO_PROGRESS"] = "1",
-            ["NEXTAI_UV"] = Uv,
-            ["NEXTAI_DATA_DIR"] = O.DataDir,
-        };
+            var env = new Dictionary<string, string>
+            {
+                ["PYTHONPATH"] = ServerDir,
+                ["UV_PYTHON_INSTALL_DIR"] = Path.Combine(Runtime, "python"),
+                ["UV_CACHE_DIR"] = Path.Combine(Runtime, "uv-cache"),
+                ["UV_NO_PROGRESS"] = "1",
+                ["NEXTAI_DATA_DIR"] = O.DataDir,
+            };
+            if (uvOk) env["NEXTAI_UV"] = Uv;
+            return env;
+        }
 
         static readonly int[] StartRetryDelays = { 2, 4, 8, 15, 30 };
 
@@ -196,50 +200,139 @@ namespace NextAI.Setup
             Info($"  データフォルダ: {O.DataDir} (空き {drive.AvailableFreeSpace / 1073741824.0:F1} GB)");
         }, ct);
 
+        // Official CPython for Windows from nuget.org (published by the Python team, Authenticode-signed).
+        // Used when security software blocks uv.exe. Pinned + SHA-256 verified.
+        const string NugetPythonVersion = "3.12.10";
+        const string NugetPythonSha256 = "0eb85c2dfccccf1b17352de4c397f69194035b7d37149eacc16f1147d93de3b8";
+        string NugetPython => Path.Combine(Runtime, "python-nuget", "tools", "python.exe");
+
         async Task GetUv(CancellationToken ct)
         {
-            if (File.Exists(Uv) && new FileInfo(Uv).Length > 1_000_000) { Info("  uv は取得済みです"); return; }
-            Progress(-1, "PyPI から uv の情報を取得中…");
-            var meta = Json.ParseObject(await http.GetStringAsync("https://pypi.org/pypi/uv/json"));
-            var wheel = meta.Arr("urls").Objects().FirstOrDefault(u => u.Str("filename").EndsWith("-py3-none-win_amd64.whl"))
-                        ?? throw new StepFailed("uv の Windows 版が見つかりません");
-            var dl = Path.Combine(Runtime, "downloads", wheel.Str("filename"));
-            await SimpleDownloader.DownloadAsync(http, wheel.Str("url"), dl, wheel.Obj("digests").Str("sha256"),
-                (done, total) => Progress(total > 0 ? done / (double)total : -1, $"{Ui.Bytes(done)} / {Ui.Bytes(total)}"), ct);
-            using (var z = ZipFile.OpenRead(dl))
+            try
             {
-                var exe = z.Entries.FirstOrDefault(e => e.FullName.EndsWith("/scripts/uv.exe", StringComparison.OrdinalIgnoreCase))
-                          ?? throw new StepFailed("uv.exe がアーカイブ内にありません");
-                Directory.CreateDirectory(Path.GetDirectoryName(Uv));
-                exe.ExtractToFile(Uv, true);
+                if (!(File.Exists(Uv) && new FileInfo(Uv).Length > 1_000_000))
+                {
+                    Progress(-1, "PyPI から uv の情報を取得中…");
+                    var meta = Json.ParseObject(await http.GetStringAsync("https://pypi.org/pypi/uv/json"));
+                    var wheel = meta.Arr("urls").Objects().FirstOrDefault(u => u.Str("filename").EndsWith("-py3-none-win_amd64.whl"))
+                                ?? throw new StepFailed("uv の Windows 版が見つかりません");
+                    var dl = await DownloadVerified(wheel.Str("url"), wheel.Str("filename"), wheel.Obj("digests").Str("sha256"), ct);
+                    using (var z = ZipFile.OpenRead(dl))
+                    {
+                        var exe = z.Entries.FirstOrDefault(e => e.FullName.EndsWith("/scripts/uv.exe", StringComparison.OrdinalIgnoreCase))
+                                  ?? throw new StepFailed("uv.exe がアーカイブ内にありません");
+                        Directory.CreateDirectory(Path.GetDirectoryName(Uv));
+                        exe.ExtractToFile(Uv, true);
+                    }
+                    Info($"  uv {meta.Obj("info").Str("version")} を取得しました (SHA256検証済み)");
+                }
+                else Info("  uv は取得済みです");
+                await StartWithRetry(Uv, new[] { "--version" }, ct, null, null);
             }
-            Info($"  uv {meta.Obj("info").Str("version")} を取得しました (SHA256検証済み)");
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                UseUv(false, ex.Message);
+            }
+        }
+
+        void UseUv(bool ok, string why = null)
+        {
+            if (!ok && uvOk)
+            {
+                Info("  uv を利用できません: " + why);
+                Info("  → Python 公式パッケージ (nuget.org) と pip で環境を構築します");
+                Warnings.Add("uv がブロックされたため、Python 公式パッケージ + pip で構築しました (セキュリティソフトの影響の可能性)");
+            }
+            uvOk = ok;
+        }
+
+        /// <summary>Download to runtime\downloads; if that file is locked / access-denied (security software),
+        /// use a fresh file name instead of failing.</summary>
+        async Task<string> DownloadVerified(string url, string name, string sha256, CancellationToken ct)
+        {
+            Action<long, long> prog = (done, total) => Progress(total > 0 ? done / (double)total : -1, $"{Ui.Bytes(done)} / {Ui.Bytes(total)}");
+            var dl = Path.Combine(Runtime, "downloads", name);
+            try
+            {
+                await SimpleDownloader.DownloadAsync(http, url, dl, sha256, prog, ct);
+                return dl;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException || ex is IOException)
+            {
+                Info($"  {name} にアクセスできないため別名で取得します ({ex.Message})");
+                var alt = Path.Combine(Runtime, "downloads", Guid.NewGuid().ToString("N").Substring(0, 8) + "-" + name);
+                await SimpleDownloader.DownloadAsync(http, url, alt, sha256, prog, ct);
+                return alt;
+            }
         }
 
         async Task CreateVenv(CancellationToken ct)
         {
             Progress(-1, "Python 3.12 を準備しています (初回は数分かかります)…");
-            var uvArgs = new[] { "venv", "--python", "3.12", "--python-preference", "only-managed", "--allow-existing", Venv };
-            try
+            if (uvOk)
             {
-                await Exec(Uv, uvArgs, ct);
+                try
+                {
+                    await Exec(Uv, new[] { "venv", "--python", "3.12", "--python-preference", "only-managed", "--allow-existing", Venv }, ct);
+                    return;
+                }
+                catch (StepFailed ex) when (!ct.IsCancellationRequested)
+                {
+                    UseUv(false, ex.Message);
+                }
             }
-            catch (StartFailed) when (!ct.IsCancellationRequested && !reacquiredUv)
+            if (await Works(Python, ct)) { Info("  既存の Python 環境を利用します"); return; }
+            if (!await Works(NugetPython, ct))
             {
-                // A damaged / half-quarantined uv.exe from an earlier run: fetch it again once, then retry.
-                reacquiredUv = true;
-                Info("  uv を取得し直して再試行します…");
-                try { if (File.Exists(Uv)) File.Delete(Uv); }
-                catch (Exception ex) { throw new StepFailed($"古い uv.exe を削除できません ({Uv}): {ex.Message}\nセキュリティソフトがファイルをロックしている可能性があります。"); }
-                await GetUv(ct);
-                await Exec(Uv, uvArgs, ct);
+                Progress(-1, $"Python {NugetPythonVersion} (公式パッケージ) を取得しています…");
+                var pkg = await DownloadVerified($"https://api.nuget.org/v3-flatcontainer/python/{NugetPythonVersion}/python.{NugetPythonVersion}.nupkg",
+                                                 $"python.{NugetPythonVersion}.nupkg", NugetPythonSha256, ct);
+                var root = Path.Combine(Runtime, "python-nuget");
+                await Task.Run(() =>
+                {
+                    if (Directory.Exists(root)) Directory.Delete(root, true);
+                    using (var z = ZipFile.OpenRead(pkg))
+                        foreach (var e in z.Entries.Where(e => e.FullName.StartsWith("tools/", StringComparison.Ordinal) && e.Name.Length > 0))
+                        {
+                            var path = Path.GetFullPath(Path.Combine(root, e.FullName.Replace('/', Path.DirectorySeparatorChar)));
+                            if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) continue;
+                            Directory.CreateDirectory(Path.GetDirectoryName(path));
+                            e.ExtractToFile(path, true);
+                        }
+                }, ct);
+                Info($"  Python {NugetPythonVersion} を展開しました (SHA256検証済み)");
             }
+            if (Directory.Exists(Venv)) await Task.Run(() => Directory.Delete(Venv, true), ct);
+            await Exec(NugetPython, new[] { "-m", "venv", Venv }, ct);
+        }
+
+        async Task<bool> Works(string python, CancellationToken ct)
+        {
+            if (!File.Exists(python)) return false;
+            try { return (await ProcessRunner.RunAsync(python, new[] { "-c", "import sys; assert sys.version_info[:2] == (3, 12)" }, null, Env(), null, O.DataDir, ct)).ExitCode == 0; }
+            catch (ProcessStartException) { return false; }
         }
 
         async Task InstallDeps(CancellationToken ct)
         {
             Progress(-1, "依存パッケージをインストールしています…");
-            await Exec(Uv, new[] { "pip", "install", "--python", Python, "--require-hashes", "-r", Path.Combine(ServerDir, "requirements.lock") }, ct);
+            var lockFile = Path.Combine(ServerDir, "requirements.lock");
+            if (uvOk)
+            {
+                try
+                {
+                    await Exec(Uv, new[] { "pip", "install", "--python", Python, "--require-hashes", "-r", lockFile }, ct);
+                    return;
+                }
+                catch (StartFailed ex) when (!ct.IsCancellationRequested)
+                {
+                    UseUv(false, ex.Message);
+                }
+            }
+            var hasPip = (await Exec(Python, new[] { "-m", "pip", "--version" }, ct, l => { }, null, false)).ExitCode == 0;
+            if (!hasPip) await Exec(Python, new[] { "-m", "ensurepip", "--default-pip" }, ct);
+            await Exec(Python, new[] { "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--only-binary=:all:",
+                                       "--require-hashes", "-r", lockFile }, ct);
         }
 
         async Task InitServer(CancellationToken ct)

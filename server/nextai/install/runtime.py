@@ -225,18 +225,21 @@ class RuntimeInstaller:
 
     def install_musicgen(self, uv: str | None = None) -> dict:
         uv = uv or os.environ.get("NEXTAI_UV") or shutil.which("uv")
-        if not uv:
-            raise DownloadError("uv が見つかりません")
         env_dir = self.rt / "genai"
         env = dict(os.environ)
         env.setdefault("UV_PYTHON_INSTALL_DIR", str(self.rt / "python"))
         env.setdefault("UV_CACHE_DIR", str(self.rt / "uv-cache"))
         self.emit({"event": "component", "component": "musicgen", "version": "torch-cu128"})
-        steps = [[uv, "venv", "--python", "3.12", "--python-preference", "only-managed", str(env_dir)],
-                 [uv, "pip", "install", "--python", str(env_dir), "--index-url", "https://download.pytorch.org/whl/cu128",
-                  "torch==2.7.1"],
-                 [uv, "pip", "install", "--python", str(env_dir), "transformers>=4.46,<5", "scipy", "numpy",
-                  "sentencepiece", "safetensors"]]
+        torch = ["--index-url", "https://download.pytorch.org/whl/cu128", "torch==2.7.1"]
+        extra = ["transformers>=4.46,<5", "scipy", "numpy", "sentencepiece", "safetensors"]
+        if uv:
+            steps = [[uv, "venv", "--python", "3.12", "--python-preference", "only-managed", str(env_dir)],
+                     [uv, "pip", "install", "--python", str(env_dir), *torch],
+                     [uv, "pip", "install", "--python", str(env_dir), *extra]]
+        else:  # uv blocked by security software: stdlib venv + pip from the server's own interpreter
+            vpy = str(env_dir / ("Scripts/python.exe" if IS_WIN else "bin/python"))
+            pip = [vpy, "-m", "pip", "install", "--disable-pip-version-check", "--no-input"]
+            steps = [[sys.executable, "-m", "venv", str(env_dir)], [*pip, *torch], [*pip, *extra]]
         for cmd in steps:
             self.emit({"event": "step", "message": " ".join(Path(cmd[0]).name if i == 0 else c for i, c in enumerate(cmd[:4]))})
             r = subprocess.run(cmd, env=env, capture_output=True, text=True, **no_window_flags(False))

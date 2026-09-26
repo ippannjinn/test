@@ -16,7 +16,7 @@
 | 他ユーザーのデータへのアクセス | すべてのクエリに user_id 条件、パスが自分の領域内にあるかを検証 | `services/files.py` |
 | ローカルの他ユーザー / プロセス | データフォルダの ACL を SYSTEM / Admins / サービスのみに制限、llama-server は 127.0.0.1 のみで待ち受け、起動ごとのランダム API キー | `Installer.cs`, `llamacpp.py` |
 | サービスアカウントの権限 | `NT SERVICE\NextAIServer` 仮想アカウントで実行 (LocalSystem は使わない) | `Installer.cs` |
-| サプライチェーン | Python 依存はハッシュ固定 (`--require-hashes`)、uv は PyPI の SHA-256 で検証、モデルは HF LFS の SHA-256 で検証、GitHub リリースは digest がある場合に検証 | `requirements.lock`, `downloader.py` |
+| サプライチェーン | Python 依存はハッシュ固定 (`--require-hashes`)、uv は PyPI の SHA-256 で検証、uv が使えない PC 用の Python 公式パッケージ (nuget.org) は SHA-256 を固定、モデルは HF LFS の SHA-256 で検証、GitHub リリースは digest がある場合に検証 | `requirements.lock`, `downloader.py` |
 | プロンプトインジェクション | ツールの結果を外部データとして囲み、システムプロンプトでその中の指示に従わないよう明示 | `runners/chat.py`, `agent.py` |
 | 自動化トークン (Claude 等) | `nxt_` 付きランダムトークンをハッシュのみ保存、スコープ (member / debug / openai)、debug は管理APIの読み取りと診断実行のみ、localhost 限定、期限付き、再発行で旧トークン失効、アカウント停止・パスワードリセットで失効 | `auth/deps.py`, `service.py` |
 | OpenAI 互換 API のキー | メンバーが自分で発行する `openai` スコープのみのキー (Web 用 API・管理 API・キー管理には使えない)、Cookie では `/v1` を使えない (CSRF の対象外にしない)、期限必須・1人あたりの個数上限、管理者が全体を無効化・個別に失効可能、API 経由でも GPU キュー・レート制限・同時実行数の制限を適用 | `api/openai.py`, `api/account.py` |
