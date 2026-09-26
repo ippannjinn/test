@@ -32,7 +32,7 @@ namespace NextAI.Admin
         public sealed class State
         {
             public bool Installed, LoggedIn, FunnelOn;
-            public string Host = "", Backend = "";
+            public string Host = "", Backend = "", Account = "";
             public string Url => Host == "" ? "" : "https://" + Host + "/";
         }
 
@@ -47,6 +47,9 @@ namespace NextAI.Admin
             st.Backend = j.Str("BackendState");
             st.LoggedIn = st.Backend == "Running";
             st.Host = j.Obj("Self").Str("DNSName").TrimEnd('.');
+            // the account this PC is signed in with: the browser must use the same one for the "enable Funnel" page
+            var uid = j.Obj("Self").Num("UserID").ToString("0");
+            st.Account = j.Obj("User").Obj(uid).Str("LoginName");
             if (st.LoggedIn)
             {
                 var f = await ProcessRunner.RunAsync(exe, new[] { "funnel", "status", "--json" }, _ => { });

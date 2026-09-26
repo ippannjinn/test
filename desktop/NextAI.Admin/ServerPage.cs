@@ -151,8 +151,8 @@ namespace NextAI.Admin
             remoteOff.Visible = remoteCopy.Visible = r.FunnelOn;
             if (!r.Installed) { remoteStatus.Text = "Tailscale が未インストールです (無料・このPCにだけ必要)"; remoteStatus.ForeColor = Ui.Muted; }
             else if (!r.LoggedIn) { remoteStatus.Text = $"Tailscale にログインしてください ({r.Backend})"; remoteStatus.ForeColor = Ui.Muted; }
-            else if (!r.FunnelOn) { remoteStatus.Text = "準備OK (未公開)"; remoteStatus.ForeColor = Ui.Muted; }
-            else { remoteStatus.Text = "● 公開中"; remoteStatus.ForeColor = Ui.Ok; }
+            else if (!r.FunnelOn) { remoteStatus.Text = $"準備OK (未公開) / Tailscale: {r.Account}"; remoteStatus.ForeColor = Ui.Muted; }
+            else { remoteStatus.Text = $"● 公開中 / Tailscale: {r.Account}"; remoteStatus.ForeColor = Ui.Ok; }
             publicUrl = r.FunnelOn ? r.Url : "";
             remoteUrl.Text = publicUrl;
         }
@@ -175,7 +175,12 @@ namespace NextAI.Admin
                 var log = new System.Text.StringBuilder();
                 var res = await RemoteAccess.EnableAsync(tunnelPort, l => log.AppendLine(l));
                 var st = await RemoteAccess.StatusAsync();
-                if (!st.FunnelOn) throw new ApiException(0, "funnel", "外部公開を開始できませんでした。\n\n" + log.ToString().Trim());
+                if (!st.FunnelOn) throw new ApiException(1, "funnel", "外部公開を開始できませんでした。\n\n" + log.ToString().Trim() +
+                    $"\n\nブラウザで「node not found」と出た場合は、ブラウザ側の Tailscale のログインが このPCのアカウント ({st.Account}) と違います。" +
+                    "\n同じアカウントでログインし直すか、手動で有効にしてください:" +
+                    "\n 1. https://login.tailscale.com/admin/dns で「HTTPS Certificates」を Enable" +
+                    "\n 2. https://login.tailscale.com/admin/acls の nodeAttrs に funnel を追加 (既定の設定なら「Enable Funnel」ボタン)" +
+                    "\nその後、もう一度「外部公開を開始」を押してください。");
                 await SetPublicUrl(st.Url);
                 Clipboard.SetText(st.Url);
                 MessageBox.Show(this, $"公開しました。URL をクリップボードにコピーしました:\n\n{st.Url}\n\n" +
