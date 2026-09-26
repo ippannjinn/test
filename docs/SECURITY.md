@@ -12,6 +12,7 @@
 | DoS / 独占 | API のトークンバケット、ユーザー別のジョブ数と同時実行数、ボディサイズの上限、アップロードの Content-Length 必須 | `SecurityMiddleware`, `jobs.py` |
 | SSRF | URL の構文検証、DNS の解決結果の検証、接続後の接続先 IP の検証、リダイレクトの再検証、ポートの制限 | `security/ssrf.py`, `tools/web.py` |
 | 任意のコード実行 | WASM サンドボックス (ネットワークなし、プロセスなし、メモリ・時間・ディスクの上限)。コードから見えるのは会話ごとの作業ディレクトリ `/workspace` だけで、添付ファイル (uploads/)、SSRF 対策付きでホスト側が取得した Web データ (downloads/, research/) もこの中に置く。ファイル系ツールは相対パスのみ・ワークスペース外は拒否。会話の削除で作業ディレクトリも削除 | `tools/sandbox.py`, `tools/registry.py`, `runners/chat.py` |
+| 完全版 Python (Pyodide) | CPython を WebAssembly (Pyodide) として Deno 内で実行。Deno の権限は `--allow-read=<Pyodide>,<作業フォルダ>` `--allow-write=<作業フォルダ>` のみ (ネットワーク・プロセス生成・環境変数・FFI は不可、`--no-remote`)。Python からは作業フォルダのメモリ上コピーだけが見え、終了時に変更ファイルだけ書き戻す。`import js` 経由で Deno API を呼んでも権限外は拒否されることをテストで確認。Deno / Pyodide 本体は npm 公式配布物をバージョン固定 + sha512 integrity 固定で検証、科学計算パッケージは固定版 pyodide-lock.json の SHA-256 で検証。時間上限超過で強制終了 | `tools/sandbox.py`, `tools/pyodide_runner.mjs`, `install/runtime.py` |
 | 生成された HTML / SVG のプレビュー | 通常のファイル配信では HTML/SVG を常にダウンロード扱い。プレビューは専用 URL のみで `CSP: sandbox allow-scripts` (same-origin なし・connect-src なし) + `frame-ancestors 'self'` のため、スクリプトはアプリの Cookie・API・画面に触れられない | `api/files.py` |
 | 権限昇格 | RBAC (admin / member)、自分の情報として変更できる項目のホワイトリスト、最後の管理者を保護、管理 API は管理アプリの Bearer + localhost のみ | `auth/deps.py`, `service.py` |
 | 他ユーザーのデータへのアクセス | すべてのクエリに user_id 条件、パスが自分の領域内にあるかを検証 | `services/files.py` |
@@ -31,5 +32,6 @@
 ## 既知の制限
 
 - ローカル CA による HTTPS では、各端末への CA のインストールが必要です。外部公開する場合は Tailscale 証明書などの正規証明書を推奨します。
-- WASM サンドボックスは Python の標準ライブラリのみ使えます (numpy などのネイティブ拡張は使えません)。
+- 完全版 Python (Pyodide) が準備されるまでは、WASM サンドボックスで Python の標準ライブラリのみ使えます。Pyodide でも pip install やネットワークは使えず、同梱パッケージ (python_packages) のみです。
+- Pyodide のメモリ上限は V8 ヒープ制限と WebAssembly の上限 (約 4GB) によるもので、WASM 版ほど厳密ではありません。時間上限で強制終了します。
 - レート制限の状態はプロセス内のメモリに保持しているため、サーバーを再起動するとリセットされます。ログイン失敗の記録は DB に保存するため、再起動しても保持されます。

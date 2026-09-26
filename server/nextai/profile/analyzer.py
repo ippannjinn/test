@@ -39,6 +39,13 @@ R_SUMMARY = _rx(r"要約|まとめて|要点|サマリ|\bsummar(y|ize|ise)\b|\bt
 R_WRITING = _rx(r"文章|作文|メール|手紙|ブログ|記事|小説|物語|詩|キャッチコピー|スピーチ|挨拶文|レポート"
                 r"|\bwrite\b.{0,20}\b(email|essay|story|article|poem|letter|blog)\b")
 R_MEMORY = _rx(r"覚えて(おいて)?|記憶して|忘れないで|\bremember (that|this)\b")
+# data analysis / exact computation: answered by running code (Code Interpreter style), never by guessing numbers
+R_ANALYSIS = _rx(r"グラフ|チャート|プロット|可視化|集計|統計|平均|中央値|分散|標準偏差|相関|回帰|分布|ヒストグラム|ピボット|"
+                 r"クロス集計|前年比|増加率|成長率|複利|ローン|返済|確率|期待値|シミュレーション|データ分析|分析して|"
+                 r"計算して|何%|何パーセント|素数|因数分解|方程式|積分|微分|行列|"
+                 r"\b(chart|plot|graph|visuali[sz]e|statistics|regression|correlation|histogram|pivot|dataframe|"
+                 r"csv|excel|spreadsheet|compute|calculate)\b")
+DATA_EXT = (".csv", ".tsv", ".xlsx", ".xls", ".json", ".parquet", ".txt", ".dat")
 R_EXEC = _rx(r"実行して|動かして|計算して|グラフ(に|を)|シミュレーション|検証して|テストして|\b(run|execute)\b.{0,15}\b(code|script|this)\b")
 R_QUALITY = _rx(r"高品質|じっくり|詳しく|詳細に|丁寧に|徹底的|本気で|最高品質|しっかり|深く考えて|\b(thorough(ly)?|in detail|deep(ly)?|carefully)\b")
 R_FAST = _rx(r"手短|簡潔|ざっくり|すぐに|急いで|一言で|短く|\b(brief(ly)?|quick(ly)?|short answer|tl;?dr)\b")
@@ -55,6 +62,7 @@ class TaskAnalysis:
     complexity: float = 0.2
     needs_web: bool = False
     needs_code_exec: bool = False
+    needs_analysis: bool = False
     needs_files: bool = False
     needs_vision: bool = False
     multi_step: bool = False
@@ -126,6 +134,8 @@ def analyze(text: str, *, attachments: list[dict] | None = None, history_turns: 
     is_reason = bool(R_REASON.search(raw))
     a.needs_web = bool(R_WEB.search(raw)) or bool(a.urls) or a.task_type == "research"
     a.needs_code_exec = bool(R_EXEC.search(raw)) and (is_code or is_reason)
+    data_files = [x for x in docs if str(x.get("name", "")).lower().endswith(DATA_EXT)]
+    a.needs_analysis = bool(R_ANALYSIS.search(raw)) or (bool(data_files) and not R_TRANSLATE.search(raw))
 
     if a.task_type == "chat":
         for rx, kind in ((R_IMAGE, "image_gen"), (R_VIDEO, "video_gen"), (R_MUSIC, "music_gen")):
@@ -165,7 +175,7 @@ def analyze(text: str, *, attachments: list[dict] | None = None, history_turns: 
     c += {"coding": 0.15, "project": 0.35, "reasoning": 0.18, "research": 0.12, "file_analysis": 0.12,
           "vision": 0.08, "writing": 0.06, "summarize": 0.04}.get(a.task_type, 0.0)
     c += min(0.15, 0.05 * a.attachments)
-    if a.needs_code_exec:
+    if a.needs_code_exec or a.needs_analysis:
         c += 0.08
     if history_turns > 12:
         c += 0.05

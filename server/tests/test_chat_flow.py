@@ -46,6 +46,11 @@ def test_agent_tool_loop_with_sandbox_and_memory(client, platform):
     j = platform.jobs.get(job["id"])
     results = [e["data"] for e in j.events if e["type"] == "tool_result" and e["data"]["name"] == "run_code"]
     assert results and results[0]["ok"] and "42" in results[0]["summary"]
+    # notebook cell: streamed and kept with the answer
+    cells = [e["data"] for e in j.events if e["type"] == "code_run"]
+    assert cells and cells[0]["code"] == "print(6*7)" and cells[0]["stdout"].strip() == "42" and cells[0]["ok"]
+    conv = client.get(f"/api/conversations/{j.conversation_id}").json()
+    assert conv["messages"][-1]["meta"]["code_runs"][0]["stdout"].strip() == "42"
     # memory op
     r = client.post("/api/conversations/new/messages", json={"content": "私の好きな色は青だと覚えておいて"})
     wait_job(client, r.json()["job"]["id"])

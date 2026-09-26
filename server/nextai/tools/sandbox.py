@@ -1,6 +1,10 @@
 """Isolated code execution.
 
 Backends:
+  pyodide — full CPython 3.13 on WebAssembly (Pyodide) with numpy / pandas / matplotlib / scipy / scikit-learn /
+            Pillow / sympy …, run inside Deno with no network, no subprocesses, no environment access and file
+            access limited to the Pyodide files (read) and the one workspace (read/write). Installed on demand;
+            this is the preferred backend once installed.
   wasm    — CPython compiled to WASI, run by wasmtime. No network, no processes, filesystem limited to
             one pre-opened per-session directory, memory capped by the store, time capped by epochs.
             Works natively on Windows; this is the default on the target PC.
@@ -166,6 +170,55 @@ class WasmPythonBackend:
         return res
 
 
+class PyodideBackend:
+    name = "pyodide"
+    STARTUP = 25.0  # Pyodide boot + loading numpy/pandas/matplotlib from disk, on top of the user's time limit
+    RUNNER_JS = Path(__file__).with_name("pyodide_runner.mjs")
+
+    def __init__(self, runtime: Path):
+        entry = runtime_manifest(runtime).get("python-full", {})
+        self.exe = runtime / entry["exe"] if entry.get("exe") else None
+        self.core = runtime / entry["core"] if entry.get("core") else None
+        self.packages: list[str] = entry.get("packages", [])
+        self.cache = runtime / "cache" / "deno"
+        self.available = bool(self.exe and self.exe.exists() and self.core and (self.core / "pyodide.mjs").exists()
+                              and self.RUNNER_JS.exists())
+
+    def command(self, workdir: Path, memory_mb: int, max_file_mb: int) -> list[str]:
+        return [str(self.exe), "run", "--quiet", "--no-prompt", "--no-config", "--no-lock", "--no-remote",
+                "--no-npm", "--unstable-detect-cjs", f"--v8-flags=--max-old-space-size={max(256, memory_mb)}",
+                f"--allow-read={self.core},{workdir}", f"--allow-write={workdir}",
+                str(self.RUNNER_JS), str(self.core), str(workdir), str(max_file_mb)]
+
+    def run_sync(self, workdir: Path, timeout: float, memory_mb: int, max_output: int,
+                 max_file_mb: int = 50) -> SandboxResult:
+        from ..backends.base import no_window_flags
+
+        self.cache.mkdir(parents=True, exist_ok=True)
+        env = {k: v for k, v in os.environ.items() if k.upper() in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PATH")}
+        env.update({"DENO_DIR": str(self.cache), "DENO_NO_UPDATE_CHECK": "1", "DENO_NO_PROMPT": "1", "NO_COLOR": "1"})
+        t0 = time.time()
+        timed_out = False
+        kw = no_window_flags(True) if os.name == "nt" else {"start_new_session": True}
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            proc = subprocess.Popen(self.command(workdir, memory_mb, max_file_mb), cwd=str(workdir), stdout=out,
+                                    stderr=err, stdin=subprocess.DEVNULL, env=env, **kw)
+            try:
+                proc.wait(timeout=timeout + self.STARTUP)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                proc.kill()
+                proc.wait(10)
+            out.seek(0)
+            err.seek(0)
+            so = out.read(max_output + 1)
+            se = err.read(max_output // 2 + 1)
+        code = 124 if timed_out else proc.returncode
+        return SandboxResult(code == 0, code, so[:max_output].decode("utf-8", "replace"),
+                             se[:max_output // 2].decode("utf-8", "replace"), timed_out, time.time() - t0, self.name,
+                             error="時間制限を超えました" if timed_out else "")
+
+
 class ProcessBackend:
     name = "process"
 
@@ -235,13 +288,47 @@ class SandboxManager:
         wasm = rt / man["path"] if man.get("path") else rt / "python-wasm" / "python.wasm"
         mode = settings.sandbox.backend
         self.backend = None
-        if mode in ("auto", "wasm"):
+        self.fallback = None
+        if mode in ("auto", "pyodide"):
+            pb = PyodideBackend(rt)
+            if pb.available:
+                self.backend = pb
+        if self.backend is None and mode in ("auto", "wasm"):
             wb = WasmPythonBackend(wasm, rt / "cache")
             if wb.available:
                 self.backend = wb
         if self.backend is None and mode in ("auto", "process") and os.name != "nt":
             self.backend = ProcessBackend()
         self._sem = asyncio.Semaphore(max(1, settings.sandbox.max_concurrent))
+        self.installing = False
+
+    def reload(self) -> None:
+        """Switch to the full Python backend once it has been installed (no restart needed)."""
+        if self.settings.sandbox.backend in ("auto", "pyodide") and not isinstance(self.backend, PyodideBackend):
+            pb = PyodideBackend(self.settings.paths.runtime)
+            if pb.available:
+                log.info("sandbox: switching to %s", pb.name)
+                self.backend = pb
+        from .registry import RunCode
+
+        RunCode.python_env = self.describe()
+
+    def describe(self) -> str:
+        """What run_code offers, for the model's instructions."""
+        if isinstance(self.backend, PyodideBackend):
+            shown = [n for n in ("numpy", "pandas", "matplotlib", "scipy", "scikit-learn", "Pillow", "sympy",
+                                 "networkx", "statsmodels", "beautifulsoup4", "lxml", "openpyxl", "xlrd", "pyyaml")
+                     if n.lower() in {x.lower() for x in self.backend.packages}]
+            return "Python 3.13 + " + (", ".join(shown) if shown else "standard library")
+        return "Python 3 (standard library only)"
+
+    @property
+    def full_python(self) -> bool:
+        return isinstance(self.backend, PyodideBackend)
+
+    @property
+    def packages(self) -> list[str]:
+        return self.backend.packages if isinstance(self.backend, PyodideBackend) else []
 
     @property
     def available(self) -> bool:
@@ -271,7 +358,10 @@ class SandboxManager:
                 if safe and safe not in ("main.py", "__nextai_run__.py"):
                     (workdir / safe).write_bytes(data)
             async with self._sem:
-                if isinstance(self.backend, ProcessBackend):
+                if isinstance(self.backend, PyodideBackend):
+                    res = await asyncio.to_thread(self.backend.run_sync, workdir, s.timeout_seconds, s.memory_mb,
+                                                  s.max_output_kb * 1024, min(s.disk_mb, 200))
+                elif isinstance(self.backend, ProcessBackend):
                     res = await asyncio.to_thread(self.backend.run_sync, workdir, s.timeout_seconds, s.memory_mb,
                                                   s.max_output_kb * 1024, s.disk_mb)
                 else:

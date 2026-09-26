@@ -614,6 +614,25 @@ function sourcesEl(list) {
   }));
 }
 
+// Notebook-style cell for each sandbox run (like ChatGPT "Analyzed" / Claude analysis): code, output, time
+function codeCell(d) {
+  const out = [d.stdout, d.stderr].filter(Boolean).join(d.stdout && d.stderr ? "\n" : "");
+  const state = d.ok ? "ok" : "fail";
+  const head = h("summary", {}, icon("code", 14), h("span", { class: "cc-title" }, d.ok ? "Python を実行しました" : "Python 実行でエラー"),
+    h("span", { class: `cc-badge ${state}` }, d.ok ? "✓" : `exit ${d.exit_code}`),
+    h("span", { class: "cc-time" }, d.duration != null ? `${d.duration}s` : ""), icon("chevron", 14));
+  const src = h("div", { class: "md" });
+  src.innerHTML = renderMarkdown("```python\n" + (d.code || "") + "\n```");
+  const body = h("div", { class: "cc-body" }, src);
+  if (out) body.append(h("div", { class: "cc-out-label" }, "出力"), h("pre", { class: `cc-out ${state}` }, out));
+  if (d.files?.length) body.append(h("div", { class: "cc-files" }, "作成: " + d.files.join(", ")));
+  return h("details", { class: `code-cell ${state}` }, head, body);
+}
+function codeCells(list) {
+  if (!list?.length) return null;
+  return h("div", { class: "code-cells" }, list.map(codeCell));
+}
+
 function memoryChip(items) {
   if (!items?.length) return null;
   return h("span", { class: "mem-chip", title: "この回答で参照した記憶:\n" + items.map((x) => "・" + x).join("\n") }, icon("brain", 14), `記憶 ${items.length}`);
@@ -647,7 +666,7 @@ function renderMessage(m, isLast = false) {
   const copyB = iconBtn("copy", "コピー", () => copyText(m.content, copyB));
   const regen = isLast ? iconBtn("refresh", "再生成", () => regenerate()) : null;
   return h("div", { class: "msg assistant" }, h("div", { class: "ai-avatar" }, h("img", { src: "icon.svg", alt: "" })),
-    h("div", { class: "body" }, mdEl(m.content), assets.length ? h("div", { class: "assets" }, assets) : null,
+    h("div", { class: "body" }, codeCells(m.meta?.code_runs), mdEl(m.content), assets.length ? h("div", { class: "assets" }, assets) : null,
       sourcesEl(m.meta?.sources), actionBar(copyB, speakBtn(m.content), regen, memoryChip(m.meta?.memories), metaInfo(m.meta))));
 }
 
@@ -720,7 +739,7 @@ async function send() {
 
 const PHASE = { plan: "計画中", act: "実行中", verify: "検証中" };
 const TOOL_LABEL = { web_research: "Webで調べ", generate_image: "画像を生成", generate_video: "動画を生成", generate_music: "音楽を作曲", web_search: "Web検索", web_fetch: "ページを読む",
-  run_code: "コードを実行", read_file: "ファイルを読む", write_file: "ファイルを書く", memory_search: "記憶を検索", memory_save: "記憶を保存" };
+  run_code: "Python を実行", convert_media: "メディアを変換", convert_document: "文書を変換", download_file: "ダウンロード", read_file: "ファイルを読む", write_file: "ファイルを書く", memory_search: "記憶を検索", memory_save: "記憶を保存" };
 function attachLive(jobId) {
   S.activeJob = jobId; updateSend();
   const statusLine = h("span", { class: "shimmer" }, "考えています…");
@@ -728,6 +747,7 @@ function attachLive(jobId) {
   const steps = h("div", { class: "steps" });
   const stepsBox = h("details", { class: "activity", hidden: true }, h("summary", {}, icon("chevron", 14), h("span", {}, "実行ログ")), steps);
   const content = h("div", { class: "md typing" });
+  const cells = h("div", { class: "code-cells" });
   const thinkText = h("div", { class: "think-text" });
   const think = h("details", { class: "thinking", hidden: true, open: true }, h("summary", {}, icon("thought", 14), h("span", {}, "思考中…")), thinkText);
   let thought = "";
@@ -735,7 +755,7 @@ function attachLive(jobId) {
   const assets = h("div", { class: "assets" });
   const info = h("span", { class: "meta-info" });
   const el = h("div", { class: "msg assistant live", "data-job": jobId }, h("div", { class: "ai-avatar spin" }, h("img", { src: "icon.svg", alt: "" })),
-    h("div", { class: "body" }, h("div", { class: "live-status" }, statusLine), prog, think, stepsBox, content, assets, actionBar(memHolder, info)));
+    h("div", { class: "body" }, h("div", { class: "live-status" }, statusLine), prog, think, stepsBox, cells, content, assets, actionBar(memHolder, info)));
   chat.inner.append(el);
   let text = "", pending = false, nsteps = 0;
   const paint = () => {
@@ -761,6 +781,7 @@ function attachLive(jobId) {
   on("plan", (p) => addStep("📋 計画:\n" + p.text));
   on("tool_call", (t) => { addStep(`🔧 ${TOOL_LABEL[t.name] || t.name} ${t.args ? t.args.slice(0, 120) : ""}`); statusLine.textContent = `${TOOL_LABEL[t.name] || t.name}しています…`; statusLine.parentElement.hidden = false; });
   on("tool_result", (t) => addStep(`${t.ok ? "✓" : "✗"} ${t.name}: ${(t.summary || "").slice(0, 160)}`));
+  on("code_run", (d) => { cells.append(codeCell(d)); scrollDown(); });
   on("verify", (v) => addStep(v.result === "pass" ? "✓ 検証OK" : "✗ 検証で問題を検出 → 修正中"));
   on("notice", (n) => addStep("ℹ " + n.message));
   on("reset", (r) => { if (r.moved) addStep("… " + r.moved.slice(0, 300)); text = ""; paint(); });

@@ -119,6 +119,69 @@ EXTERNAL_TOOLS: dict[str, dict] = {
 }
 
 
+# Full-featured Python sandbox: Pyodide (CPython on WebAssembly, with numpy/pandas/matplotlib/scipy/...) run by
+# Deno with no network/process/env permissions. Both come from the npm registry, pinned and verified against the
+# npm integrity (sha512); the scientific packages are fetched from Pyodide's CDN and verified against the sha256
+# listed in the pinned pyodide-lock.json.
+NPM = "https://registry.npmjs.org"
+DENO = {"version": "2.9.6",
+        "win": ("@deno/win32-x64", "sha512-qRGnmVz/Ea6UWPht/S3xFRK17UZ/ls38DSVfgGB17fpASLxPkksqzWUI/BzL9YYoOknYzfc94mySGyInZu/JXw=="),
+        "linux": ("@deno/linux-x64-glibc", "sha512-3md4TKLCuzsLDmfOoC5KN7NAZaxSVkMgm64vg6foD00JBADCpYS2/5QqXfzgnP5ZQz3iLP9vBQJtEgc116OAoQ==")}
+PYODIDE = {"version": "0.29.5",
+           "integrity": "sha512-TkYrUv9m8QmfImADKRmpwZulL48E0uUaBSO+dvRQKyAJc0qh9gu7jn8btyHPh3NZm1r2IH2YrJhIr7Q2B9urAw==",
+           "cdn": "https://cdn.jsdelivr.net/pyodide/v0.29.5/full/"}
+
+
+def _npm_tarball(pkg: str, version: str) -> str:
+    return f"{NPM}/{pkg}/-/{pkg.rsplit('/', 1)[-1]}-{version}.tgz"
+
+
+def _check_integrity(path: Path, integrity: str) -> None:
+    import base64
+    import hashlib
+
+    algo, _, want = integrity.partition("-")
+    h = hashlib.new(algo)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    if base64.b64encode(h.digest()).decode() != want:
+        path.unlink(missing_ok=True)
+        raise DownloadError(f"{path.name}: チェックサムが一致しません (破損または改ざんの可能性)")
+
+
+def _safe_untar(archive: Path, dest: Path, strip: str = "") -> None:
+    import tarfile
+
+    tmp = dest.with_name(dest.name + ".tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    with tarfile.open(archive) as t:
+        for m in t.getmembers():
+            name = m.name[len(strip):] if strip and m.name.startswith(strip) else m.name
+            if not name or name.startswith(("/", "\\")) or ".." in Path(name).parts or not (m.isfile() or m.isdir()):
+                continue
+            m.name = name
+            t.extract(m, tmp)
+    shutil.rmtree(dest, ignore_errors=True)
+    tmp.rename(dest)
+
+
+def pyodide_closure(lock: dict, wanted: list[str]) -> list[str]:
+    """`wanted` plus every package they depend on, per pyodide-lock.json (unknown names are skipped)."""
+    pk = lock.get("packages", {})
+    alias = {k.lower().replace("_", "-"): k for k in pk}
+    out: list[str] = []
+    stack = [alias.get(w.lower().replace("_", "-")) for w in wanted]
+    while stack:
+        n = stack.pop()
+        if not n or n in out or n not in pk:
+            continue
+        out.append(n)
+        stack += [alias.get(d.lower().replace("_", "-")) for d in pk[n].get("depends", [])]
+    return sorted(out)
+
+
 class RuntimeInstaller:
     def __init__(self, settings: Settings, emit: Event, client: httpx.Client | None = None):
         self.settings, self.emit = settings, emit
@@ -325,6 +388,55 @@ class RuntimeInstaller:
         self.manifest[name] = entry
         self._save()
         self.emit({"event": "component_done", "component": name})
+        return entry
+
+    def _fetch(self, url: str, name: str, sha256: str | None = None) -> Path:
+        dest = self.rt / "downloads" / name
+
+        def prog(n: str, done: int, size: int) -> None:
+            self.emit({"event": "progress", "component": "python-full", "file": n, "done": done, "size": size})
+
+        return Downloader(self.client, prog, segments=4).download(RemoteFile(url=url, path=name, sha256=sha256), dest)
+
+    def install_pyodide(self, packages: list[str]) -> dict:
+        """Deno + Pyodide + the requested packages (and their dependencies) under runtime/tools/pyodide/."""
+        self.emit({"event": "component", "component": "python-full", "version": f"pyodide {PYODIDE['version']}"})
+        base = self.rt / "tools" / "pyodide"
+        deno_pkg, deno_int = DENO["win" if IS_WIN else "linux"]
+        deno_dir = base / "deno"
+        exe = deno_dir / ("deno.exe" if IS_WIN else "deno")
+        entry = self.manifest.get("python-full") or {}
+        if not exe.exists() or entry.get("deno") != DENO["version"]:
+            tgz = self._fetch(_npm_tarball(deno_pkg, DENO["version"]), f"deno-{DENO['version']}.tgz")
+            _check_integrity(tgz, deno_int)
+            _safe_untar(tgz, deno_dir, "package/")
+            if not IS_WIN:
+                exe.chmod(0o755)
+        core = base / "core"
+        if not (core / "pyodide.mjs").exists() or entry.get("pyodide") != PYODIDE["version"]:
+            tgz = self._fetch(_npm_tarball("pyodide", PYODIDE["version"]), f"pyodide-{PYODIDE['version']}.tgz")
+            _check_integrity(tgz, PYODIDE["integrity"])
+            _safe_untar(tgz, core, "package/")
+        lock = json.loads((core / "pyodide-lock.json").read_text("utf-8"))
+        names = pyodide_closure(lock, packages)
+        for n in names:
+            info = lock["packages"][n]
+            fname = info["file_name"]
+            if not re.fullmatch(r"[\w.+-]+\.(whl|zip|tar)", fname):
+                raise DownloadError(f"不正なファイル名: {fname}")
+            target = core / fname
+            if target.exists():
+                continue
+            got = self._fetch(PYODIDE["cdn"] + fname, fname, info.get("sha256"))
+            shutil.copyfile(got, target)
+        if not exe.exists():
+            raise DownloadError("deno が見つかりません")
+        entry = {"version": PYODIDE["version"], "pyodide": PYODIDE["version"], "deno": DENO["version"],
+                 "exe": exe.relative_to(self.rt).as_posix(), "core": core.relative_to(self.rt).as_posix(),
+                 "packages": names, "license": "MPL-2.0 (Pyodide) / MIT (Deno)"}
+        self.manifest["python-full"] = entry
+        self._save()
+        self.emit({"event": "component_done", "component": "python-full"})
         return entry
 
     def installed(self, component: str) -> bool:

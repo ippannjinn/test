@@ -170,7 +170,7 @@ class ProfileEngine:
             # like the cloud assistants: search is always at hand; the model decides when it needs it
             tools += ["web_research", "web_search", "web_fetch"]
         sandbox = self.sandbox_enabled_fn()
-        if sandbox and (a.needs_code_exec or (a.task_type in ("coding", "reasoning") and t >= 0.6)):
+        if sandbox and (a.needs_code_exec or a.needs_analysis or (a.task_type in ("coding", "reasoning") and t >= 0.6)):
             tools.append("run_code")
         if a.needs_files:
             tools.append("read_file")
@@ -212,12 +212,18 @@ class ProfileEngine:
         if any(x.startswith("generate_") for x in prof.tools):
             g = self.settings.generation
             max_seconds = max(max_seconds, g.video_timeout_seconds if "generate_video" in prof.tools else 900)
+        if sandbox and a.needs_analysis and "run_code" in prof.tools:
+            # Code-Interpreter loop: inspect → compute → chart → fix errors → summarize needs a few rounds
+            prof.use_agent = True
+            steps = max(steps, 6)
         if a.deep_research or a.autonomous:
             prof.use_agent = prof.plan = prof.verify = True
             steps = max(steps, 16)
             max_seconds = max(max_seconds, 1200)
         prof.limits = {"max_steps": max(steps, 3) if a.is_media else steps, "max_seconds": max_seconds,
                        "max_tool_calls": max(pol["max_tool_calls"], 2) if a.is_media else
+                       max(pol["max_tool_calls"], 8) if (a.needs_analysis and "run_code" in prof.tools
+                                                         and not (a.deep_research or a.autonomous)) else
                        max(pol["max_tool_calls"], 30) if (a.deep_research or a.autonomous) else pol["max_tool_calls"],
                        "max_consecutive_failures": p.max_consecutive_failures, "max_total_tokens": p.max_total_tokens}
         prof.priority_class = "interactive" if t < 0.4 else "standard" if t < 0.75 else "batch"
@@ -230,6 +236,15 @@ class ProfileEngine:
         quality = cap * 0.7 + spec.cap("japanese") * 0.3 if a.language == "ja" else cap
         rt = self.manager.runtimes[spec.id]
         hot = 1.0 if rt.state == HOT else 0.4 if rt.state == WARM else 0.0
+        if self.settings.models.strategy == "single" and prof.task_type not in ("translation",):
+            # one strong model for every mode: speed comes from no reasoning / shorter output, not from a weaker
+            # model. General ability dominates so the same model stays loaded; a specialist only wins when it is
+            # clearly better for the task and nothing better is already in memory.
+            general = sum(spec.cap(c) for c in ("chat", "reasoning", "tools", "writing")) / 4
+            primary = 0.1 if spec.id == self.settings.models.primary_model else 0.0
+            special = 0.05 if (prof.tuning >= 0.5 and a.task_type in ("coding", "project")
+                               and "coding" in spec.roles) else 0.0
+            return 0.6 * general + 0.4 * quality + 0.05 * hot + primary + special
         if prof.quality_pinned:
             return quality + 0.05 * hot
         w_q, w_s = 0.3 + 0.7 * t, 0.7 * (1 - t)
@@ -337,7 +352,9 @@ class ProfileEngine:
                 new.label = prof.label.split(" ")[0] + " (軽量化)"
                 new.reasons.append("リソース逼迫のため途中で軽量化")
                 changed = True
-                if prof.model_id and self.manager.ram_heavy(prof.model_id):
+                single = self.settings.models.strategy == "single"
+                if prof.model_id and self.manager.ram_heavy(prof.model_id) and (
+                        not single or self.governor.state.level >= Level.CRITICAL):
                     # the model itself holds a lot of RAM (CPU-side MoE experts): move to one that fits in VRAM
                     lighter = [m for m in prof.fallback_models if self.manager.usable(m) and not self.manager.ram_heavy(m)
                                and self.manager.fits_now(m)]

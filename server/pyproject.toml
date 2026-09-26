@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nextai-platform"
-version = "1.9.1"
+version = "1.10.0"
 description = "Self-hosted multi-user multimodal AI platform (server)"
 requires-python = ">=3.11"
 dependencies = [
@@ -32,7 +32,7 @@ nextai = "nextai.cli:main"
 include = ["nextai*"]
 
 [tool.setuptools.package-data]
-nextai = ["migrations/*.sql", "catalog/*.json", "web/*", "web/**/*"]
+nextai = ["migrations/*.sql", "catalog/*.json", "web/*", "web/**/*", "tools/*.mjs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

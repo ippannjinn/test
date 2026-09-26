@@ -344,3 +344,28 @@ h3 { font-size: 16px; margin: 22px 0 10px; }
 .md .code-head { gap: 4px; }
 .md .code-head > span:first-child { flex: 1; }
 .fc-body .preview-frame { height: 320px; }
+
+/* notebook-style code execution cells */
+.code-cells { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; }
+.code-cells:empty { display: none; }
+.code-cell { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); overflow: hidden; }
+.code-cell > summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer;
+  font-size: 13px; color: var(--muted); user-select: none; }
+.code-cell > summary::-webkit-details-marker { display: none; }
+.code-cell > summary:hover { background: var(--hover); }
+.code-cell > summary svg:last-child { margin-left: auto; transition: transform .15s; }
+.code-cell[open] > summary svg:last-child { transform: rotate(180deg); }
+.code-cell .cc-title { color: var(--text); font-weight: 500; }
+.code-cell .cc-badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; }
+.code-cell .cc-badge.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.code-cell .cc-badge.fail { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.code-cell .cc-time { font-size: 12px; color: var(--faint); }
+.code-cell .cc-body { border-top: 1px solid var(--border); padding: 8px 12px 12px; }
+.code-cell .cc-body pre { margin: 0; }
+.code-cell .cc-out-label { font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+.code-cell .cc-out { background: var(--panel-2); color: var(--text); border-radius: 8px; padding: 10px 12px; max-height: 320px;
+  overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.code-cell .cc-out.fail { border-left: 3px solid var(--danger); }
+.code-cell .cc-files { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.code-cell .cc-body .md pre { margin: 0; }
+.code-cell .cc-body .md > :first-child { margin-top: 0; }

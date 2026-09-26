@@ -48,6 +48,13 @@ PROJECT_RULES = """あなたはワークスペースにファイルを作成し�
 Pythonで検証可能な部分は run_code で実際に実行して確認してください (run_code のカレントディレクトリがワークスペースです)。
 最後に、作成したファイル一覧・使い方・検証結果をまとめてください。"""
 
+ANALYSIS_RULES = """データ分析・計算はコードを実行して答えます (Code Interpreter 方式)。
+1. まず run_code でデータや条件を確認する (ファイルなら形・列名・先頭数行・欠損)。
+2. 集計・統計・数値計算は必ず run_code で実行し、出力された数値だけを回答に使う。暗算や推測で数値を書かない。
+3. グラフは matplotlib で作り plt.savefig('名前.png') で保存する (自動で表示されます)。日本語フォントが無いため軸ラベル・凡例は英語か記号にする。表は CSV / Excel で保存してもよい。
+4. エラーが出たらトレースバックを読んで原因を直し、再実行する。同じ誤りを繰り返さない。使えないライブラリは使える物で代替する。
+5. 最後に、主要な数値・グラフ・解釈・前提や注意点を簡潔にまとめる。"""
+
 
 def _history(p: Any, conv_id: str, exclude_id: str) -> list[dict]:
     rows = p.db.query("SELECT id, role, content FROM messages WHERE conversation_id=? AND id!=? ORDER BY created_at DESC"
@@ -117,7 +124,7 @@ async def _attachment_context(p: Any, user: dict, rows: list[dict], query: str, 
 WORKSPACE_TOOLS = ("run_code", "write_file", "read_workspace", "list_workspace", "download_file", "share_file",
                    "convert_media", "probe_media", "convert_document")
 WORKSPACE_RULES = """サンドボックス (隔離環境) の作業ディレクトリ /workspace をこの会話で使えます。
-- run_code のコードはこの中だけで動き、ネットワークにはアクセスできません (Python 標準ライブラリのみ)。
+- run_code のコードはこの中だけで動き、ネットワークにはアクセスできません ({python_env})。pip install はできません。
 - 利用者の添付ファイルは uploads/ に置かれています。Web上のデータは download_file で downloads/ に、調べたページは web_fetch の save_as で research/ に保存してから run_code で処理できます。
 - run_code で作ったグラフ・表・文書 (png, svg, csv, xlsx, pdf, html, md など) は自動で利用者に表示されます。それ以外を渡すときは share_file を使ってください。
 - 動画・音声の変換/切り出しは convert_media (ffmpeg)、文書形式の変換 (Markdown⇔Word など) は convert_document (pandoc) を使えます。必要なツールは初回に自動でダウンロードされます。
@@ -296,9 +303,11 @@ async def run_chat(p: Any, job: Job) -> dict:
         sys_parts.append(f"注意: このサーバーには{MEDIA_LABEL[analysis.task_type]}生成モデルがインストールされていないため、"
                          "生成はできません。その旨と、管理者にモデルの追加を依頼できることを伝えてください。")
     if ws is not None:
-        sys_parts.append(WORKSPACE_RULES.format(listing=_listing(ws)))
+        sys_parts.append(WORKSPACE_RULES.format(listing=_listing(ws), python_env=p.sandbox.describe()))
     if analysis.task_type == "project":
         sys_parts.append(PROJECT_RULES)
+    if getattr(analysis, "needs_analysis", False) and "run_code" in profile.tools:
+        sys_parts.append(ANALYSIS_RULES)
     system = "\n\n".join(sys_parts)
     budget = max(1024, profile.ctx_tokens - profile.max_tokens - estimate_tokens(system) - estimate_tokens(analysis.text) - 256)
     att_text, image_parts, notes = await _attachment_context(p, user, attachments, analysis.text, int(budget * 0.6), vision)
@@ -387,7 +396,8 @@ async def run_chat(p: Any, job: Job) -> dict:
             "assets": [{"id": a["id"], "name": a["name"], "mime": a["mime"]} for a in assets],
             "tools": sorted({e["data"].get("name") for e in job.events if e["type"] == "tool_call"}),
             "duration": round(now() - t0, 2), "job_id": job.id, "memories": used_memories,
-            "sources": _merge_sources(research_sources + ctx_research(ctx), _sources(job))}
+            "sources": _merge_sources(research_sources + ctx_research(ctx), _sources(job)),
+            "code_runs": [e["data"] for e in job.events if e["type"] == "code_run"][-8:]}
     mid = new_id()
     p.db.execute("INSERT INTO messages(id, conversation_id, user_id, role, content, meta, job_id, created_at)"
                  " VALUES (?,?,?,?,?,?,?,?)", (mid, conv_id, user["id"], "assistant", text, dumps(meta), job.id, now()))

@@ -216,10 +216,16 @@ def present(ctx: ToolContext, rel: str) -> dict | None:
 
 class RunCode(Tool):
     name = "run_code"
-    description = ("Run Python 3 (standard library only) in the isolated sandbox: no network, limited CPU/RAM/time. "
-                   "The working directory /workspace persists for this conversation and contains the user's uploads "
-                   "(uploads/), downloaded data (downloads/) and saved research (research/). Print results to stdout. "
-                   "New charts/tables/documents you write (png, svg, csv, xlsx, pdf, html, md, ...) are shown to the user.")
+    # set by the platform from the active sandbox backend (see SandboxManager.describe)
+    python_env = "Python 3 (standard library only)"
+
+    @property
+    def description(self) -> str:  # type: ignore[override]
+        return (f"Run {self.python_env} in the isolated sandbox: no network, no pip install, limited CPU/RAM/time. "
+                "The working directory /workspace persists for this conversation and contains the user's uploads "
+                "(uploads/), downloaded data (downloads/) and saved research (research/). Print results to stdout. "
+                "New charts/tables/documents you write (png, svg, csv, xlsx, pdf, html, md, ...) are shown to the "
+                "user; save matplotlib charts with plt.savefig('chart.png').")
     parameters = {"type": "object", "properties": {"code": {"type": "string", "description": "complete Python program"}},
                   "required": ["code"]}
     timeout = 90
@@ -256,7 +262,27 @@ class RunCode(Tool):
         text = res.to_text()
         if shown:
             text += "\n\nshown to the user: " + ", ".join(shown)
+        text += _repair_hint(res, self.python_env)
+        if ctx.job is not None:  # notebook-style cell in the UI (code, output, duration)
+            ctx.job.emit("code_run", code=code[:6000], stdout=res.stdout[:3000], stderr=res.stderr[:2000], ok=res.ok,
+                         exit_code=res.exit_code, backend=res.backend, duration=round(res.duration, 2), files=shown)
         return ToolResult(res.ok, text, {"exit_code": res.exit_code, "files": res.files})
+
+
+def _repair_hint(res, env: str) -> str:
+    """Point the model at the fix (self-repair loop) instead of letting it give up or invent the output."""
+    err = (res.stderr or "") + (res.error or "")
+    if res.ok:
+        return ""
+    if res.timed_out:
+        return "\n\nhint: time limit reached - use a smaller sample / vectorized code and run again."
+    m = re.search(r"ModuleNotFoundError: No module named '([\w.]+)'", err)
+    if m:
+        return (f"\n\nhint: '{m.group(1)}' is not available and pip cannot be used. Available: {env}. "
+                "Rewrite with those and run again.")
+    if "Traceback" in err or res.exit_code not in (0, None):
+        return "\n\nhint: read the traceback, fix the cause and run the corrected program again."
+    return ""
 
 
 def _chunks(text: str, size: int = 1800) -> list[str]:

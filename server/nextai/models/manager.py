@@ -227,8 +227,8 @@ class ModelManager:
         return sum(1 for t in self.load_events if t >= cutoff) > m.thrash_max_swaps
 
     def _resident_id(self) -> str | None:
-        if not self.settings.models.resident_fast_model:
-            return None
+        if not self.settings.models.resident_fast_model or self.settings.models.strategy == "single":
+            return None  # single-model strategy: memory goes to the one strong model, not a resident small one
         for s in self.usable_models(("llm",)):
             if "fast" in s.roles:
                 return s.id

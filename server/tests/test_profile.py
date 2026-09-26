@@ -13,9 +13,8 @@ from nextai.resources.monitor import MockGpuProvider, ResourceMonitor
 from conftest import make_settings
 
 
-@pytest.fixture
-def engine(tmp_path):
-    s = make_settings(tmp_path)
+def _engine(tmp_path, **overrides):
+    s = make_settings(tmp_path, **overrides)
     s.paths.ensure()
     db = Database(s.paths.db)
     db.migrate()
@@ -26,6 +25,11 @@ def engine(tmp_path):
     congestion = {"v": 0.0}
     eng = ProfileEngine(s, mgr, gov, lambda: congestion["v"])
     return eng, congestion, gov, mgr
+
+
+@pytest.fixture
+def engine(tmp_path):
+    return _engine(tmp_path)
 
 
 @pytest.mark.parametrize("text,task", [
@@ -43,11 +47,25 @@ def test_analyzer_task_types(text, task):
     assert analyze(text).task_type == task
 
 
-def test_greeting_is_speed_and_uses_fast_model(engine):
+def test_greeting_is_speed_but_keeps_the_strong_model(engine):
+    """Single-model strategy: speed mode does not drop to the tiny model (that made answers suddenly dumb)."""
     eng, *_ = engine
     p = eng.decide(analyze("こんにちは"))
-    assert p.label == "速度特化" and p.model_id == "qwen3-4b-instruct" and not p.use_agent
-    assert p.priority_class == "interactive"
+    assert p.label == "速度特化" and p.model_id == "qwen3-30b-a3b-instruct" and not p.use_agent
+    assert p.priority_class == "interactive" and p.reasoning == "off"
+    for text in ("量子力学と古典力学の違いを比較して分析して", "今日の東京の天気を調べて"):
+        assert eng.decide(analyze(text)).model_id == "qwen3-30b-a3b-instruct"
+
+
+def test_adaptive_strategy_still_uses_fast_model(tmp_path):
+    eng, *_ = _engine(tmp_path, models={"strategy": "adaptive"})
+    p = eng.decide(analyze("こんにちは"))
+    assert p.label == "速度特化" and p.model_id == "qwen3-4b-instruct"
+
+
+def test_primary_model_setting_wins(tmp_path):
+    eng, *_ = _engine(tmp_path, models={"primary_model": "gpt-oss-20b"})
+    assert eng.decide(analyze("こんにちは")).model_id == "gpt-oss-20b"
 
 
 def test_complex_coding_is_autonomous_with_tools(engine):
@@ -170,3 +188,27 @@ def test_three_modes(engine):
     prof = eng.decide(code)
     assert code.autonomous and not code.deep_research and code.task_type == "coding"
     assert "run_code" in prof.tools and prof.use_agent and prof.plan
+
+
+@pytest.mark.parametrize("text,att", [
+    ("この売上データを月別に集計してグラフにして", []),
+    ("年利3%で100万円を10年複利運用したらいくら？計算して", []),
+    ("これ見て", [{"name": "sales.csv", "mime": "text/csv", "tokens": 100}]),
+])
+def test_analysis_requests_get_the_code_interpreter_loop(engine, text, att):
+    eng, *_ = engine
+    a = analyze(text, attachments=att)
+    assert a.needs_analysis
+    p = eng.decide(a)
+    assert "run_code" in p.tools and p.use_agent and p.limits["max_steps"] >= 6 and p.limits["max_tool_calls"] >= 8
+
+
+def test_plain_chat_is_not_analysis():
+    assert not analyze("こんにちは、元気？").needs_analysis
+    assert not analyze("この文章を英語に翻訳して: 今日は晴れ").needs_analysis
+
+
+def test_when_the_big_model_does_not_fit_the_next_strong_one_is_used(engine, monkeypatch):
+    eng, _, _, mgr = engine
+    monkeypatch.setattr(mgr, "fits_now", lambda mid: mid not in ("qwen3-30b-a3b-instruct", "qwen3-coder-30b-a3b"))
+    assert eng.decide(analyze("こんにちは")).model_id == "gpt-oss-20b"

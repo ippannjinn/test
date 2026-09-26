@@ -74,6 +74,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "models": {
         "backend_mode": "auto",
+        "strategy": "single",
+        "primary_model": "",
         "resident_fast_model": True,
         "idle_unload_seconds": 900,
         "prefetch": True,
@@ -112,6 +114,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "disk_mb": 500,
         "max_output_kb": 64,
         "max_concurrent": 2,
+        "full_python": True,
+        "python_packages": ["numpy", "pandas", "matplotlib", "scipy", "scikit-learn", "pillow", "sympy", "networkx",
+                            "statsmodels", "beautifulsoup4", "lxml", "xlrd", "pyyaml", "regex"],
     },
     "tools": {
         "auto_install": True,

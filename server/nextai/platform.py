@@ -182,8 +182,41 @@ class Platform:
         self._spawn(self._housekeeping())
         (self.settings.paths.data_dir / "run").mkdir(exist_ok=True)
         self._spawn(self._watch_stop_flag())
+        self.sandbox.reload()
+        self._spawn(self.ensure_full_python())
         log.info("platform started v%s backends=%s gpu=%s sandbox=%s", self.version, self.backends.mode,
                  self.gpu.name, self.sandbox.name)
+
+    async def ensure_full_python(self) -> bool:
+        """Install the full Python sandbox (Pyodide + numpy/pandas/matplotlib/...) in the background; until it is
+        ready, run_code keeps using the standard-library sandbox."""
+        sb, t = self.settings.sandbox, self.settings.tools
+        if (not sb.full_python or sb.backend not in ("auto", "pyodide") or not t.auto_install
+                or self.sandbox.installing):
+            return self.sandbox.full_python
+        from .install.runtime import RuntimeInstaller
+
+        have = set(self.sandbox.packages)
+        if self.sandbox.full_python and have and not set(sb.python_packages) - have:
+            return True
+        self.sandbox.installing = True
+        try:
+            await asyncio.sleep(20)  # let the server finish starting first
+            from .install.downloader import ensure_space
+
+            ensure_space(self.settings.paths.runtime, 600 * 2**20, self.settings.resources.disk_margin_gb)
+            await asyncio.to_thread(lambda: RuntimeInstaller(self.settings, lambda ev: None)
+                                    .install_pyodide(list(sb.python_packages)))
+            self.sandbox.reload()
+            log.info("full Python sandbox ready: %s", self.sandbox.describe())
+            return self.sandbox.full_python
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 - the stdlib sandbox keeps working
+            log.warning("full Python sandbox could not be installed: %s", e)
+            return False
+        finally:
+            self.sandbox.installing = False
 
     async def stop(self) -> None:
         await self.jobs.cancel_all()
