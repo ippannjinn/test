@@ -134,10 +134,13 @@ class WebFetch(Tool):
 
 class DownloadFile(Tool):
     name = "download_file"
-    description = ("Download a public file (CSV, JSON, Excel, PDF, image, dataset, ...) from http/https into the sandbox "
-                   "workspace so run_code can process it. Internal/LAN addresses are blocked.")
+    description = ("Download a public file (CSV, JSON, Excel, PDF, image, audio, video, dataset, ...) from http/https into "
+                   "the sandbox workspace so run_code / convert_media can process it. Google Drive, Google Docs/Sheets/"
+                   "Slides, Dropbox and OneDrive share links work directly (the file must be shared as 'anyone with the "
+                   "link'). Internal/LAN addresses are blocked.")
     parameters = {"type": "object", "properties": {
-        "url": {"type": "string"}, "save_as": {"type": "string", "description": "relative path, e.g. downloads/data.csv"}},
+        "url": {"type": "string"}, "save_as": {"type": "string", "description": "relative path, e.g. downloads/data.csv"},
+        "format": {"type": "string", "description": "Google Docs/Sheets/Slides only: export format, e.g. pdf, docx, xlsx, csv, pptx"}},
         "required": ["url"]}
     timeout = 120
 
@@ -145,23 +148,31 @@ class DownloadFile(Tool):
         _web_budget(ctx)
         if ctx.workspace is None:
             return ToolResult(False, "ワークスペースがありません")
+        from ..services.cloudlinks import PRIVATE_HINT, direct_url
+
         url = str(args.get("url", ""))
         host = (urlsplit(url).hostname or "").lower()
         if any(host == h or host.endswith("." + h) for h in STREAMING_HOSTS):
             return ToolResult(False, STREAMING_NOTE)
+        save_as = str(args.get("save_as") or "")
+        # Google Drive / Docs / Dropbox / OneDrive share links → the file itself
+        fetch_url, service = direct_url(url, str(args.get("format") or "") or Path(save_as).suffix.lstrip("."))
         limit = int(ctx.platform.settings.web.max_download_mb) * 2**20
         try:
-            res = await ctx.platform.web.fetch(url, max_bytes=limit + 1)
+            res = await ctx.platform.web.fetch(fetch_url, max_bytes=limit + 1)
         except SSRFError as e:
             return ToolResult(False, f"アクセスが拒否されました: {e}")
         if res.status >= 400:
-            return ToolResult(False, f"HTTP {res.status}")
+            return ToolResult(False, f"HTTP {res.status}" + (f" ({service}) " + PRIVATE_HINT if service else ""))
         if len(res.body) > limit:
             return ToolResult(False, f"ファイルが大きすぎます (上限 {limit // 2**20}MB)")
-        if "text/html" in (res.content_type or "").lower() and not str(args.get("save_as") or "").endswith((".html", ".htm")):
+        if "text/html" in (res.content_type or "").lower() and not save_as.endswith((".html", ".htm")):
+            if service:
+                return ToolResult(False, f"{service}: " + PRIVATE_HINT)
             return ToolResult(False, "この URL はファイルではなく Web ページでした。ページの内容が必要なら web_fetch を使ってください。"
                                      "動画・音声ファイルを変換したい場合は、ファイルそのものの URL か、利用者にファイルをアップロードしてもらってください。")
-        name = str(args.get("save_as") or "") or "downloads/" + (_url_name(res.url) or "download.bin")
+        fname = re.sub(r"[^\w.\-]", "_", res.filename)[:80].strip("._") if res.filename else ""
+        name = save_as or "downloads/" + (fname or _url_name(res.url) or "download.bin")
         p = _ws_path(ctx, name)
         ctx.platform.files.check_quota(ctx.user, len(res.body))
         p.parent.mkdir(parents=True, exist_ok=True)

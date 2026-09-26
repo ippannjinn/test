@@ -128,7 +128,7 @@ WORKSPACE_RULES = """サンドボックス (隔離環境) の作業ディレク�
 - 利用者の添付ファイルは uploads/ に置かれています。Web上のデータは download_file で downloads/ に、調べたページは web_fetch の save_as で research/ に保存してから run_code で処理できます。
 - run_code で作ったグラフ・表・文書 (png, svg, csv, xlsx, pdf, html, md など) は自動で利用者に表示されます。それ以外を渡すときは share_file を使ってください。
 - 動画・音声の変換/切り出しは convert_media (ffmpeg)、文書形式の変換 (Markdown⇔Word など) は convert_document (pandoc) を使えます。必要なツールは初回に自動でダウンロードされます。
-- 変換の依頼には必ずツールを使って実際にファイルを作ってください。添付ファイルは uploads/ にあります。ファイルそのものの URL なら download_file で取得してから変換します。
+- 変換の依頼には必ずツールを使って実際にファイルを作ってください。添付ファイルは uploads/ にあります。ファイルそのものの URL や Google ドライブ / Dropbox / OneDrive の共有リンクなら download_file で取得してから変換・分析します (共有設定が「リンクを知っている全員」になっている必要があります)。
 - YouTube などの配信サービスからのダウンロード・音声抜き出しは利用規約と著作権の理由で行いません。その場合は理由と代わりの方法 (自分のファイルのアップロード、公式のオフライン機能) を短く伝えてください。
 - ファイルは会話が続く限り残ります。
 現在のファイル:
@@ -159,21 +159,40 @@ _TARGET = re.compile(r"(mp3|mp4|m4a|wav|ogg|flac|gif|webm|docx|word|ワード|ma
 _ALIAS = {"word": "docx", "ワード": "docx", "markdown": "md", "マークダウン": "md"}
 
 
-async def _convert_fallback(p: Any, job: Job, ctx: Any, text: str, attachments: list[dict]) -> None:
-    """Clear request ("この動画をmp3にして" + one attachment) but the model didn't call a converter: do it directly."""
+_MEDIA_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus"}
+
+
+async def _convert_fallback(p: Any, job: Job, ctx: Any, text: str, attachments: list[dict],
+                            urls: list[str] | None = None) -> None:
+    """Clear request ("この動画をmp3にして" + one attachment or one Drive/Dropbox link) but the model didn't call a
+    converter: do it directly."""
+    from ..services.cloudlinks import direct_url
+
     m = _TARGET.findall(text)
-    if not m or len(attachments) != 1:
+    if not m:
         return
     target = _ALIAS.get(m[-1].lower(), m[-1].lower())
-    src = attachments[0]
-    name = re.sub(r"[^\w.\- ]", "_", src["name"]).strip(" .")[:120] or src["id"]
     tool = "convert_document" if target in ("docx", "md", "html", "epub", "odt") else "convert_media"
-    if tool == "convert_media" and not src["mime"].startswith(("video/", "audio/")):
+    if len(attachments) == 1:
+        src = attachments[0]
+        name = re.sub(r"[^\w.\- ]", "_", src["name"]).strip(" .")[:120] or src["id"]
+        if tool == "convert_media" and not src["mime"].startswith(("video/", "audio/")):
+            return
+        rel = f"uploads/{name}"
+    elif not attachments and len(urls or []) == 1 and direct_url(urls[0])[1]:
+        job.emit("tool_call", id="convert-download", name="download_file", args=urls[0][:300])
+        got = await registry.execute(ctx, "download_file", {"url": urls[0]}, job.emit)
+        job.emit("tool_result", id="convert-download", name="download_file", ok=got.ok, summary=got.content[:400])
+        rel = (got.data or {}).get("path", "") if got.ok else ""
+        if not rel or (tool == "convert_media" and Path(rel).suffix.lower() not in _MEDIA_EXT):
+            return
+        name = Path(rel).name
+    else:
         return
     out = f"{Path(name).stem}.{target}"
     job.emit("notice", message="モデルが変換ツールを呼ばなかったため、直接変換します")
-    job.emit("tool_call", id="convert-fallback", name=tool, args=f"uploads/{name} -> {out}")
-    res = await registry.execute(ctx, tool, {"input": f"uploads/{name}", "output": out}, job.emit)
+    job.emit("tool_call", id="convert-fallback", name=tool, args=f"{rel} -> {out}")
+    res = await registry.execute(ctx, tool, {"input": rel, "output": out}, job.emit)
     job.emit("tool_result", id="convert-fallback", name=tool, ok=res.ok, summary=res.content[:400])
 
 
@@ -357,8 +376,8 @@ async def run_chat(p: Any, job: Job) -> dict:
                 extra = f"{label}を生成しました。"
                 text = (text.rstrip() + "\n\n" + extra) if text.strip() else extra
                 job.emit("delta", text=("\n\n" if text != extra else "") + extra)
-        if analysis.needs_convert and not ctx.assets and ws is not None and attachments:
-            await _convert_fallback(p, job, ctx, analysis.text, attachments)
+        if analysis.needs_convert and not ctx.assets and ws is not None and (attachments or analysis.urls):
+            await _convert_fallback(p, job, ctx, analysis.text, attachments, analysis.urls)
             if ctx.assets:
                 extra = "変換したファイルを用意しました。"
                 text = (text.rstrip() + "\n\n" + extra) if text.strip() else extra

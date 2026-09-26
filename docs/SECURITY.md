@@ -13,6 +13,7 @@
 | SSRF | URL の構文検証、DNS の解決結果の検証、接続後の接続先 IP の検証、リダイレクトの再検証、ポートの制限 | `security/ssrf.py`, `tools/web.py` |
 | 任意のコード実行 | WASM サンドボックス (ネットワークなし、プロセスなし、メモリ・時間・ディスクの上限)。コードから見えるのは会話ごとの作業ディレクトリ `/workspace` だけで、添付ファイル (uploads/)、SSRF 対策付きでホスト側が取得した Web データ (downloads/, research/) もこの中に置く。ファイル系ツールは相対パスのみ・ワークスペース外は拒否。会話の削除で作業ディレクトリも削除 | `tools/sandbox.py`, `tools/registry.py`, `runners/chat.py` |
 | 完全版 Python (Pyodide) | CPython を WebAssembly (Pyodide) として Deno 内で実行。Deno の権限は `--allow-read=<Pyodide>,<作業フォルダ>` `--allow-write=<作業フォルダ>` のみ (ネットワーク・プロセス生成・環境変数・FFI は不可、`--no-remote`)。Python からは作業フォルダのメモリ上コピーだけが見え、終了時に変更ファイルだけ書き戻す。`import js` 経由で Deno API を呼んでも権限外は拒否されることをテストで確認。Deno / Pyodide 本体は npm 公式配布物をバージョン固定 + sha512 integrity 固定で検証、科学計算パッケージは固定版 pyodide-lock.json の SHA-256 で検証。時間上限超過で強制終了 | `tools/sandbox.py`, `tools/pyodide_runner.mjs`, `install/runtime.py` |
+| クラウドの共有リンク (Google ドライブ / Dropbox / OneDrive) | 共有リンクを公開ダウンロード用 URL に書き換えるだけで、利用者のアカウントへのログインや認証情報の保存は一切しない (「リンクを知っている全員」で共有されたファイルのみ)。取得は通常の download_file と同じ SSRF 対策・サイズ上限・クォータの下で行う | `services/cloudlinks.py`, `tools/registry.py` |
 | 生成された HTML / SVG のプレビュー | 通常のファイル配信では HTML/SVG を常にダウンロード扱い。プレビューは専用 URL のみで `CSP: sandbox allow-scripts` (same-origin なし・connect-src なし) + `frame-ancestors 'self'` のため、スクリプトはアプリの Cookie・API・画面に触れられない | `api/files.py` |
 | 権限昇格 | RBAC (admin / member)、自分の情報として変更できる項目のホワイトリスト、最後の管理者を保護、管理 API は管理アプリの Bearer + localhost のみ | `auth/deps.py`, `service.py` |
 | 他ユーザーのデータへのアクセス | すべてのクエリに user_id 条件、パスが自分の領域内にあるかを検証 | `services/files.py` |

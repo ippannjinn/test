@@ -23,6 +23,17 @@ class FetchResult:
     content_type: str
     body: bytes
     truncated: bool
+    filename: str = ""  # from Content-Disposition (cloud storage downloads carry the real name there)
+
+
+def _disposition_name(value: str) -> str:
+    from urllib.parse import unquote
+
+    m = re.search(r"filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)", value)
+    if m:
+        return unquote(m.group(1).strip().strip('"'))
+    m = re.search(r'filename\s*=\s*"?([^";]+)"?', value)
+    return m.group(1).strip() if m else ""
 
 
 class _TextExtractor(HTMLParser):
@@ -120,7 +131,8 @@ class WebClient:
                         del buf[max_bytes:]
                         break
                 log.info("web fetch %s -> %s (%d bytes)", urlsplit(url).netloc, r.status_code, len(buf))
-                return FetchResult(str(r.url), r.status_code, r.headers.get("content-type", ""), bytes(buf), truncated)
+                return FetchResult(str(r.url), r.status_code, r.headers.get("content-type", ""), bytes(buf), truncated,
+                                   _disposition_name(r.headers.get("content-disposition", "")))
         raise SSRFError("リダイレクトが多すぎます")
 
     async def fetch_text(self, url: str, max_chars: int = 12000) -> dict:
