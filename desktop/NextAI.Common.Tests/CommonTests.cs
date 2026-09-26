@@ -66,6 +66,17 @@ public class ProcessRunnerTests
     public void QuotesLikeCommandLineToArgv(string input, string expected) => Assert.Equal(expected, ProcessRunner.Quote(input));
 
     [Fact]
+    public void StartFailureIsReportedWithCode()
+    {
+        var ex = Assert.ThrowsAny<ProcessStartException>(() =>
+            ProcessRunner.RunAsync("/nonexistent/dir/uv.exe", new string[0]).GetAwaiter().GetResult());
+        Assert.Equal(2, ex.Code);
+        Assert.False(ex.Transient);
+        Assert.Contains("uv.exe", ex.Message);
+        Assert.NotEqual("", ex.Hint);
+    }
+
+    [Fact]
     public void JoinsArguments() =>
         Assert.Equal("-m nextai --data-dir \"C:\\Program Data\\x\"", ProcessRunner.JoinArgs(new[] { "-m", "nextai", "--data-dir", "C:\\Program Data\\x" }));
 }

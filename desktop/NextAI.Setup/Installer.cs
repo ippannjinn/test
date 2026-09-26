@@ -27,9 +27,15 @@ namespace NextAI.Setup
         public string PreviousVersion;
     }
 
-    sealed class StepFailed : Exception
+    class StepFailed : Exception
     {
         public StepFailed(string message) : base(message) { }
+    }
+
+    /// <summary>The executable could not be started at all (as opposed to running and failing).</summary>
+    sealed class StartFailed : StepFailed
+    {
+        public StartFailed(string message) : base(message) { }
     }
 
     /// <summary>Every step is idempotent, so re-running setup (or pressing "retry") resumes where it stopped.</summary>
@@ -47,6 +53,7 @@ namespace NextAI.Setup
         readonly List<(string title, Func<CancellationToken, Task> run)> plan = new List<(string, Func<CancellationToken, Task>)>();
 
         string Runtime => Path.Combine(O.DataDir, "runtime");
+        bool reacquiredUv;
         string Uv => Path.Combine(Runtime, "uv", "uv.exe");
         string Venv => Path.Combine(Runtime, "venv");
         string Python => Path.Combine(Venv, "Scripts", "python.exe");
@@ -112,9 +119,40 @@ namespace NextAI.Setup
             ["NEXTAI_DATA_DIR"] = O.DataDir,
         };
 
+        static readonly int[] StartRetryDelays = { 2, 4, 8, 15, 30 };
+
+        /// <summary>Starts a process, waiting out antivirus scans of freshly downloaded executables
+        /// (CreateProcess returns "access denied" while Defender / other AV inspects a new file).</summary>
+        async Task<ProcessResult> StartWithRetry(string exe, IEnumerable<string> args, CancellationToken ct, Action<string> onLine, string stdin)
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    return await ProcessRunner.RunAsync(exe, args, onLine ?? (l => Info("  " + l)), Env(), stdin, O.DataDir, ct);
+                }
+                catch (ProcessStartException ex) when (ex.Transient && attempt < StartRetryDelays.Length && File.Exists(exe))
+                {
+                    var wait = StartRetryDelays[attempt];
+                    Info($"  {Path.GetFileName(exe)} を起動できません (Win32 エラー {ex.Code})。セキュリティソフトの検査待ちの可能性があるため {wait} 秒後に再試行します…");
+                    Progress(-1, $"{Path.GetFileName(exe)} の起動を待っています (セキュリティソフトの検査中の可能性)…");
+                    await Task.Delay(TimeSpan.FromSeconds(wait), ct);
+                }
+                catch (ProcessStartException ex)
+                {
+                    Info($"  ✗ {ex.Message}");
+                    var gone = !File.Exists(exe) ? "ファイルが見つかりません (セキュリティソフトに隔離された可能性があります)。" : ex.Hint;
+                    throw new StartFailed($"{Path.GetFileName(exe)} を起動できませんでした (Win32 エラー {ex.Code}: {ex.InnerException?.Message})\n" +
+                                         $"場所: {exe}\n{gone}\n" +
+                                         "Windows セキュリティ →「ウイルスと脅威の防止」→「保護の履歴」でブロックされていないか確認し、" +
+                                         "許可してから「再試行」してください。");
+                }
+            }
+        }
+
         async Task<ProcessResult> Exec(string exe, IEnumerable<string> args, CancellationToken ct, Action<string> onLine = null, string stdin = null, bool check = true)
         {
-            var res = await ProcessRunner.RunAsync(exe, args, onLine ?? (l => Info("  " + l)), Env(), stdin, O.DataDir, ct);
+            var res = await StartWithRetry(exe, args, ct, onLine, stdin);
             if (check && res.ExitCode != 0)
             {
                 var tail = string.Join("\n", res.Output.Split('\n').Reverse().Take(12).Reverse());
@@ -160,7 +198,7 @@ namespace NextAI.Setup
 
         async Task GetUv(CancellationToken ct)
         {
-            if (File.Exists(Uv)) { Info("  uv は取得済みです"); return; }
+            if (File.Exists(Uv) && new FileInfo(Uv).Length > 1_000_000) { Info("  uv は取得済みです"); return; }
             Progress(-1, "PyPI から uv の情報を取得中…");
             var meta = Json.ParseObject(await http.GetStringAsync("https://pypi.org/pypi/uv/json"));
             var wheel = meta.Arr("urls").Objects().FirstOrDefault(u => u.Str("filename").EndsWith("-py3-none-win_amd64.whl"))
@@ -181,7 +219,21 @@ namespace NextAI.Setup
         async Task CreateVenv(CancellationToken ct)
         {
             Progress(-1, "Python 3.12 を準備しています (初回は数分かかります)…");
-            await Exec(Uv, new[] { "venv", "--python", "3.12", "--python-preference", "only-managed", "--allow-existing", Venv }, ct);
+            var uvArgs = new[] { "venv", "--python", "3.12", "--python-preference", "only-managed", "--allow-existing", Venv };
+            try
+            {
+                await Exec(Uv, uvArgs, ct);
+            }
+            catch (StartFailed) when (!ct.IsCancellationRequested && !reacquiredUv)
+            {
+                // A damaged / half-quarantined uv.exe from an earlier run: fetch it again once, then retry.
+                reacquiredUv = true;
+                Info("  uv を取得し直して再試行します…");
+                try { if (File.Exists(Uv)) File.Delete(Uv); }
+                catch (Exception ex) { throw new StepFailed($"古い uv.exe を削除できません ({Uv}): {ex.Message}\nセキュリティソフトがファイルをロックしている可能性があります。"); }
+                await GetUv(ct);
+                await Exec(Uv, uvArgs, ct);
+            }
         }
 
         async Task InstallDeps(CancellationToken ct)

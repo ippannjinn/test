@@ -13,6 +13,39 @@ namespace NextAI.Common
         public string Output = "";
     }
 
+    /// <summary>CreateProcess itself failed (blocked by security software, missing file, ...).</summary>
+    public sealed class ProcessStartException : Exception
+    {
+        public readonly string Exe;
+        public readonly int Code;
+
+        public ProcessStartException(string exe, int code, string message, Exception inner)
+            : base($"{message} (起動できません: {exe}, Win32 エラー {code})", inner)
+        {
+            Exe = exe;
+            Code = code;
+        }
+
+        /// <summary>Access denied / sharing violation / virus scan: usually antivirus still scanning a new file.</summary>
+        public bool Transient => Code == 5 || Code == 32 || Code == 225;
+
+        public string Hint
+        {
+            get
+            {
+                switch (Code)
+                {
+                    case 2: case 3: return "ファイルが見つかりません。セキュリティソフトに隔離 (削除) された可能性があります。";
+                    case 5: return "セキュリティソフト (Windows セキュリティ / Defender の「保護の履歴」や他社製ウイルス対策ソフト) が実行をブロックしている可能性があります。";
+                    case 225: return "ウイルス対策ソフトがこのファイルを脅威と判定しました (誤検知の可能性があります)。";
+                    case 1260: case 4551: case 4556: return "グループポリシー / アプリケーション制御 (スマート アプリ コントロール、WDAC、AppLocker) により実行がブロックされています。";
+                    case 193: return "ファイルが壊れています (ダウンロードの破損)。";
+                    default: return "";
+                }
+            }
+        }
+    }
+
     public static class ProcessRunner
     {
         /// <summary>Runs a process hidden, streaming each output line to onLine. Never uses a shell.</summary>
@@ -41,7 +74,8 @@ namespace NextAI.Common
                     };
                     p.OutputDataReceived += handler;
                     p.ErrorDataReceived += handler;
-                    p.Start();
+                    try { p.Start(); }
+                    catch (System.ComponentModel.Win32Exception ex) { throw new ProcessStartException(exe, ex.NativeErrorCode, ex.Message, ex); }
                     p.BeginOutputReadLine();
                     p.BeginErrorReadLine();
                     if (stdin != null)
