@@ -141,6 +141,25 @@ namespace NextAI.Setup
             }
         }
 
+        public static (int code, string output) Capture(string exe, params string[] args)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(exe, ProcessRunner.JoinArgs(args))
+                {
+                    UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                };
+                using (var p = Process.Start(psi))
+                {
+                    var err = p.StandardError.ReadToEndAsync();
+                    var output = p.StandardOutput.ReadToEnd() + err.Result;
+                    p.WaitForExit();
+                    return (p.ExitCode, output.Trim());
+                }
+            }
+            catch (Exception ex) { return (-1, ex.Message); }
+        }
+
         /// <summary>Launches a program as the non-elevated desktop user (via Explorer).</summary>
         public static void LaunchUnelevated(string target)
         {

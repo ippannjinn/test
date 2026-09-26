@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -329,15 +330,29 @@ class Settings:
         return out
 
 
+def _read_config(path: Path) -> dict:
+    """Security software can briefly lock files it is scanning (Windows reports that as permission denied)."""
+    if not path.exists():
+        return {}
+    for attempt in range(6):
+        try:
+            return tomllib.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(0.5 * (attempt + 1))
+    return {}
+
+
 def load_settings(data_dir: str | Path | None = None, config_file: str | Path | None = None) -> Settings:
     if config_file is not None:
         cfg_path = Path(config_file)
-        values = tomllib.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+        values = _read_config(cfg_path)
         data_dir = data_dir or values.get("paths", {}).get("data_dir") or cfg_path.parent
     else:
         data_dir = data_dir or os.environ.get("NEXTAI_DATA_DIR") or _default_data_dir()
         cfg_path = Path(data_dir) / "config.toml"
-        values = tomllib.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+        values = _read_config(cfg_path)
     values.pop("paths", None)
     return Settings(Path(data_dir), values)
 

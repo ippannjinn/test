@@ -103,6 +103,8 @@ namespace NextAI.Setup
                 {
                     StepState?.Invoke(i, "fail");
                     Info("✗ " + ex.Message);
+                    if (ex.Message.IndexOf("Permission denied", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        ex.Message.Contains("アクセスが拒否") || ex.Message.Contains("PermissionError")) Diagnose();
                     throw new StepFailed($"{plan[i].title} に失敗しました:\n{ex.Message}");
                 }
                 StepState?.Invoke(i, Warnings.Count > warnBefore ? "warn" : "done");
@@ -175,9 +177,15 @@ namespace NextAI.Setup
         // ------------------------------------------------------------------ steps
         async Task StopService(CancellationToken ct)
         {
-            if (!WinService.Exists()) { Info("  既存サービスはありません"); return; }
-            Progress(-1, "サービスを停止しています…");
-            await WinService.StopAsync();
+            if (WinService.Exists())
+            {
+                Progress(-1, "サービスを停止しています…");
+                await WinService.StopAsync();
+            }
+            else Info("  既存サービスはありません");
+            // A crashed service host / earlier setup can leave python.exe or llama-server.exe running and holding files.
+            var killed = await Task.Run(() => LeftoverProcesses(kill: true).ToList(), ct);
+            foreach (var k in killed) Info("  残っていたプロセスを終了しました: " + k);
         }
 
         Task ExtractApp(CancellationToken ct) => Task.Run(() =>
@@ -198,7 +206,90 @@ namespace NextAI.Setup
                 Directory.CreateDirectory(Path.Combine(O.DataDir, d));
             var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(O.DataDir)));
             Info($"  データフォルダ: {O.DataDir} (空き {drive.AvailableFreeSpace / 1073741824.0:F1} GB)");
+            RepairDataAccess();
         }, ct);
+
+        /// <summary>Files left by an earlier install (created by the service account, restricted ACLs, odd owners)
+        /// must stay readable by setup: re-grant SYSTEM / Administrators full control on the whole data folder.
+        /// The service's own grant is re-applied at service registration.</summary>
+        void RepairDataAccess()
+        {
+            string[] Grant() => new[] { O.DataDir, "/grant", "*S-1-5-18:(OI)(CI)F", "/grant", "*S-1-5-32-544:(OI)(CI)F", "/T", "/C", "/Q" };
+            var r = Shell.Capture("icacls.exe", Grant());
+            if (r.code != 0)
+            {
+                Info("  データフォルダのアクセス権を修復しています (所有者を Administrators に変更)…");
+                Shell.Capture("takeown.exe", "/F", O.DataDir, "/R", "/A");
+                r = Shell.Capture("icacls.exe", Grant());
+                if (r.code != 0) Info("  icacls: " + Tail(r.output, 6));
+            }
+            var cfg = Path.Combine(O.DataDir, "config.toml");
+            if (File.Exists(cfg))
+            {
+                bool CanOpen() { try { using (File.Open(cfg, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) { } return true; } catch { return false; } }
+                if (!CanOpen())
+                {
+                    // e.g. an explicit deny entry: reset the file's ACL to what the data folder grants.
+                    Info($"  ⚠ {cfg} を開けないためアクセス権をリセットします");
+                    Shell.Capture("icacls.exe", cfg, "/reset", "/Q");
+                    try { File.SetAttributes(cfg, FileAttributes.Normal); } catch { }
+                    if (!CanOpen()) Diagnose(cfg);
+                }
+            }
+        }
+
+        static string Tail(string s, int lines) => string.Join("\n", (s ?? "").Split('\n').Reverse().Take(lines).Reverse()).Trim();
+
+        /// <summary>Writes what we can learn about an access problem to the log (ACL, owner, holders, security software).</summary>
+        public void Diagnose(string path = null)
+        {
+            try
+            {
+                Info("---- 診断情報 ----");
+                var id = System.Security.Principal.WindowsIdentity.GetCurrent();
+                var admin = new System.Security.Principal.WindowsPrincipal(id).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+                Info($"  実行ユーザー: {id.Name} / 管理者として実行: {admin}");
+                foreach (var p in new[] { O.DataDir, path ?? Path.Combine(O.DataDir, "config.toml") }.Distinct())
+                    if (File.Exists(p) || Directory.Exists(p))
+                    {
+                        Info("  icacls " + p);
+                        Info("    " + Tail(Shell.Capture("icacls.exe", p).output, 8).Replace("\n", "\n    "));
+                        try { Info($"    属性: {File.GetAttributes(p)}"); } catch (Exception ex) { Info("    属性: " + ex.Message); }
+                    }
+                var av = Shell.Capture("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                    "Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct | ForEach-Object { $_.displayName }");
+                Info("  セキュリティソフト: " + (string.IsNullOrWhiteSpace(av.output) ? "(取得できません)" : av.output.Replace("\r\n", ", ").Replace("\n", ", ")));
+                var cfa = Shell.Capture("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                    "(Get-MpPreference).EnableControlledFolderAccess");
+                Info("  コントロールされたフォルダーアクセス: " + (cfa.output.Trim() == "1" ? "有効" : cfa.output.Trim() == "0" ? "無効" : cfa.output.Trim()));
+                foreach (var name in LeftoverProcesses()) Info("  実行中の関連プロセス: " + name);
+                Info("------------------");
+            }
+            catch (Exception ex) { Info("  診断情報の取得に失敗: " + ex.Message); }
+        }
+
+        /// <summary>Processes started from our install / data folders (an old server, llama-server, ...) other than setup itself.</summary>
+        IEnumerable<string> LeftoverProcesses(bool kill = false)
+        {
+            var roots = new[] { Path.GetFullPath(O.InstallDir), Path.GetFullPath(O.DataDir) };
+            var self = System.Diagnostics.Process.GetCurrentProcess().Id;
+            var found = new List<string>();
+            foreach (var p in System.Diagnostics.Process.GetProcesses())
+            {
+                try
+                {
+                    if (p.Id == self) continue;
+                    var exe = p.MainModule?.FileName;
+                    if (exe == null || !roots.Any(r => exe.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))) continue;
+                    if (Path.GetFileName(exe).StartsWith("NextAI-Setup", StringComparison.OrdinalIgnoreCase)) continue;
+                    found.Add($"{Path.GetFileName(exe)} (PID {p.Id})");
+                    if (kill) { p.Kill(); p.WaitForExit(10000); }
+                }
+                catch { }
+                finally { p.Dispose(); }
+            }
+            return found;
+        }
 
         // Official CPython for Windows from nuget.org (published by the Python team, Authenticode-signed).
         // Used when security software blocks uv.exe. Pinned + SHA-256 verified.
