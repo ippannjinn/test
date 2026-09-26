@@ -311,6 +311,8 @@ function accountMenu(anchor) {
     { icon: "spark", label: "端末に合わせる", active: t === "auto", onclick: () => setTheme("auto") },
     "-",
     { icon: "logout", label: "ログアウト", onclick: () => logout(false) },
+    "-",
+    { icon: "spark", label: `${S.info.name || "NextAI"} v${S.info.version || "?"}`, desc: "サーバーのバージョン", onclick: () => {} },
   ], { up: true });
 }
 

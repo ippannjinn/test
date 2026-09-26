@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -182,6 +182,15 @@ def create_app(platform: Platform, manage_lifecycle: bool = True) -> FastAPI:
         app.include_router(r)
 
     web_dir = Path(str(resources.files("nextai").joinpath("web")))
+    index_html = (web_dir / "index.html").read_text(encoding="utf-8").replace(
+        'href="app.css"', f'href="app.css?v={__version__}"').replace('src="app.js"', f'src="app.js?v={__version__}"')
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/index.html", include_in_schema=False)
+    def index():
+        # versioned asset URLs: after an update the browser can't keep running the previous UI
+        return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
+
     app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="web")
     app.add_middleware(SecurityMiddleware, platform=platform)
     return app

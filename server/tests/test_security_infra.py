@@ -292,3 +292,9 @@ def test_update_check_prefers_newest_of_api_and_cached_link(monkeypatch):
 def test_web_ui_files_revalidate(client):
     r = client.get("/app.js")
     assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+
+
+def test_index_uses_versioned_assets(client, platform):
+    r = client.get("/")
+    assert r.status_code == 200 and f'app.js?v={platform.version}' in r.text and f'app.css?v={platform.version}' in r.text
+    assert r.headers["cache-control"] == "no-cache" and "content-security-policy" in r.headers
