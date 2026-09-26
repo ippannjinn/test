@@ -109,6 +109,16 @@ def pick_sd_assets(assets: list[dict], cuda: str | None, prefer: str = "auto") -
     raise DownloadError("stable-diffusion.cpp の適切なビルドが見つかりません")
 
 
+EXTERNAL_TOOLS: dict[str, dict] = {
+    "ffmpeg": {"repo": "BtbN/FFmpeg-Builds", "asset_win": r"^ffmpeg-master-latest-win64-gpl\.zip$",
+               "asset_linux": r"^ffmpeg-master-latest-linux64-gpl\.tar\.xz$", "exe": "ffmpeg", "extra": ["ffprobe"],
+               "license": "GPL", "size_mb": 200, "purpose": "動画・音声の変換/切り出し/情報取得"},
+    "pandoc": {"repo": "jgm/pandoc", "asset_win": r"^pandoc-[\d.]+-windows-x86_64\.zip$",
+               "asset_linux": r"^pandoc-[\d.]+-linux-amd64\.tar\.gz$", "exe": "pandoc",
+               "license": "GPL", "size_mb": 60, "purpose": "文書形式の変換 (Markdown / Word / HTML / EPUB など)"},
+}
+
+
 class RuntimeInstaller:
     def __init__(self, settings: Settings, emit: Event, client: httpx.Client | None = None):
         self.settings, self.emit = settings, emit
@@ -270,6 +280,51 @@ class RuntimeInstaller:
         entry = {"python": py.relative_to(self.rt).as_posix(), "version": "torch-2.7.1-cu128"}
         self.manifest["musicgen"] = entry
         self._save()
+        return entry
+
+    def install_tool(self, name: str) -> dict:
+        """On-demand external tools (ffmpeg, pandoc) from their official GitHub releases, SHA-256 verified via the
+        release asset digest. Installed under runtime/tools/<name>/ and recorded in the runtime manifest."""
+        spec = EXTERNAL_TOOLS.get(name)
+        if spec is None:
+            raise DownloadError(f"不明なツールです: {name}")
+        rx = re.compile(spec["asset_win" if IS_WIN else "asset_linux"])
+        for rel in self._releases(spec["repo"]):
+            asset = next((a for a in rel.get("assets", []) if rx.match(a["name"])), None)
+            if asset:
+                break
+        else:
+            raise DownloadError(f"{name} の配布ファイルが見つかりません ({spec['repo']})")
+        self.emit({"event": "component", "component": name, "version": rel["tag_name"]})
+        dest = self.rt / "tools" / name
+        archive = self._download_asset(asset, dest)
+        if archive.name.endswith(".zip"):
+            self._extract(archive, dest)
+        else:
+            import tarfile
+
+            tmp = dest.with_name(dest.name + ".tmp")
+            shutil.rmtree(tmp, ignore_errors=True)
+            with tarfile.open(archive) as t:
+                for m in t.getmembers():
+                    if m.name.startswith(("/", "\\")) or ".." in Path(m.name).parts or m.issym() or m.islnk():
+                        continue
+                    t.extract(m, tmp)
+            shutil.rmtree(dest, ignore_errors=True)
+            tmp.rename(dest)
+        exe = self._find(dest, [spec["exe"]])
+        if not exe:
+            raise DownloadError(f"{spec['exe']} がアーカイブ内にありません")
+        if not IS_WIN:
+            exe.chmod(0o755)
+            for extra in spec.get("extra", []):
+                x = self._find(dest, [extra])
+                if x:
+                    x.chmod(0o755)
+        entry = {"version": rel["tag_name"], "exe": exe.relative_to(self.rt).as_posix(), "license": spec["license"]}
+        self.manifest[name] = entry
+        self._save()
+        self.emit({"event": "component_done", "component": name})
         return entry
 
     def installed(self, component: str) -> bool:

@@ -128,6 +128,13 @@ def system_checks(settings: Settings) -> list[Check]:
     sd = find_executable(rt, "sd.cpp", ["sd", "sd-cli"])
     out.append(Check("rt_sd", "画像/動画ランタイム (sd.cpp)", PASS if sd else WARN,
                      man.get("sd.cpp", {}).get("version", "") if sd else "未インストール"))
+    from .install.runtime import EXTERNAL_TOOLS
+
+    for name, spec in EXTERNAL_TOOLS.items():
+        exe = find_executable(rt, name, [spec["exe"]])
+        out.append(Check(f"tool_{name}", f"外部ツール ({name})", PASS if exe else SKIP,
+                         man.get(name, {}).get("version", "") if exe else "未取得 (必要になったときに自動ダウンロード)",
+                         spec["purpose"]))
     wasm = man.get("python-wasm", {}).get("path")
     out.append(Check("rt_wasm", "サンドボックス (python.wasm)", PASS if wasm and (rt / wasm).exists() else WARN,
                      wasm or "未インストール", advice="" if wasm else "コード実行機能が無効になります"))

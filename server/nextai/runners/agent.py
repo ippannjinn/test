@@ -68,7 +68,11 @@ class AgentRunner:
         async def one(call: dict) -> ToolResult:
             async with sem:
                 self.job.emit("tool_call", id=call["id"], name=call["name"], args=_short(call.get("arguments", "")))
-                res = await registry.execute(self.ctx, call["name"], call.get("arguments") or "{}", self.job.emit)
+                if call["name"] not in self.profile.tools:
+                    # only the tools offered for this turn may run, whatever name the model produces
+                    res = ToolResult(False, f"ツール {call['name']} はこの会話では使えません")
+                else:
+                    res = await registry.execute(self.ctx, call["name"], call.get("arguments") or "{}", self.job.emit)
                 self.job.emit("tool_result", id=call["id"], name=call["name"], ok=res.ok, summary=res.content[:400])
                 return res
 

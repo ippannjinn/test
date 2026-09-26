@@ -75,6 +75,9 @@ class Platform:
         self.storage = StorageGuard(settings, self.governor)
         self.sandbox = SandboxManager(settings, self.governor)
         self.web = WebClient(settings)
+        from .services.extools import ExternalTools
+
+        self.extools = ExternalTools(self)
         self.profiles = ProfileEngine(settings, self.models, self.governor, self.scheduler.congestion,
                                       sandbox_enabled_fn=lambda: self.sandbox.available)
         self.jobs = JobManager(self)

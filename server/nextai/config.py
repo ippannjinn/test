@@ -113,6 +113,11 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "max_output_kb": 64,
         "max_concurrent": 2,
     },
+    "tools": {
+        "auto_install": True,
+        "allowed": ["ffmpeg", "pandoc"],
+        "timeout_seconds": 300,
+    },
     "web": {
         "search_provider": "duckduckgo",
         "searxng_url": "",

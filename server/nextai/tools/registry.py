@@ -347,6 +347,128 @@ class ShareFile(Tool):
         return ToolResult(True, f"shown to the user: {rel}" if row else f"{rel} is already shown")
 
 
+MEDIA_OUT = {".mp4", ".webm", ".gif", ".mp3", ".wav", ".ogg", ".m4a", ".flac", ".png", ".jpg", ".jpeg", ".webp"}
+AUDIO_OUT = {".mp3", ".wav", ".ogg", ".m4a", ".flac"}
+IMAGE_OUT = {".png", ".jpg", ".jpeg", ".webp"}
+DOC_FORMATS = {".md": "markdown", ".markdown": "markdown", ".docx": "docx", ".html": "html", ".htm": "html", ".odt": "odt",
+               ".epub": "epub", ".rst": "rst", ".txt": "plain", ".tex": "latex", ".org": "org", ".ipynb": "ipynb"}
+
+
+async def _external(ctx: ToolContext, name: str, exe: str | None = None):
+    from ..services.extools import ToolUnavailable
+
+    try:
+        main = await ctx.platform.extools.ensure(name, ctx.job.emit)
+    except ToolUnavailable as e:
+        raise ToolError(str(e)) from e
+    return main if exe is None else (ctx.platform.extools.path(name, exe) or main)
+
+
+class ConvertMedia(Tool):
+    name = "convert_media"
+    description = ("Convert / cut / resize video and audio files in the sandbox workspace with ffmpeg (downloaded "
+                   "automatically the first time). Examples: video -> mp4/webm/gif, extract audio to mp3, trim a clip, "
+                   "grab a frame as png. The output file is shown to the user.")
+    parameters = {"type": "object", "properties": {
+        "input": {"type": "string", "description": "workspace path, e.g. uploads/movie.mov"},
+        "output": {"type": "string", "description": "workspace path; the extension decides the format (" +
+                   ", ".join(sorted(MEDIA_OUT)) + ")"},
+        "start": {"type": "number", "description": "start time in seconds"},
+        "duration": {"type": "number", "description": "length in seconds"},
+        "width": {"type": "integer", "minimum": 16, "maximum": 3840, "description": "resize to this width"},
+        "fps": {"type": "integer", "minimum": 1, "maximum": 60}},
+        "required": ["input", "output"]}
+    timeout = 600
+
+    async def run(self, ctx, args):
+        src, dst = _ws_path(ctx, str(args.get("input", ""))), _ws_path(ctx, str(args.get("output", "")))
+        if not src.is_file():
+            return ToolResult(False, f"入力ファイルがありません: {args.get('input')}")
+        ext = dst.suffix.lower()
+        if ext not in MEDIA_OUT:
+            return ToolResult(False, f"出力形式 {ext} には対応していません ({', '.join(sorted(MEDIA_OUT))})")
+        ffmpeg = await _external(ctx, "ffmpeg")
+        cmd = ["-hide_banner", "-nostdin", "-y", "-protocol_whitelist", "file,pipe"]
+        if args.get("start") is not None:
+            cmd += ["-ss", f"{max(0.0, float(args['start'])):.3f}"]
+        cmd += ["-i", src.name if src.parent == dst.parent else str(src)]
+        if args.get("duration") is not None:
+            cmd += ["-t", f"{max(0.05, float(args['duration'])):.3f}"]
+        filters = []
+        if args.get("width"):
+            filters.append(f"scale={int(args['width'])}:-2")
+        if args.get("fps"):
+            filters.append(f"fps={int(args['fps'])}")
+        if ext in AUDIO_OUT:
+            cmd += ["-vn"]
+        else:
+            if filters:
+                cmd += ["-vf", ",".join(filters)]
+            if ext in IMAGE_OUT:
+                cmd += ["-frames:v", "1"]
+            elif ext == ".mp4":
+                cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        cmd.append(str(dst))
+        code, out = await ctx.platform.extools.run(ffmpeg, cmd, cwd=src.parent)
+        if code != 0 or not dst.exists():
+            return ToolResult(False, f"ffmpeg が失敗しました (code {code}):\n{out[-1500:]}")
+        ctx.platform.files.check_quota(ctx.user, 0)
+        rel = dst.relative_to(ctx.workspace).as_posix()
+        present(ctx, rel)
+        return ToolResult(True, f"created /workspace/{rel} ({dst.stat().st_size} bytes) and showed it to the user")
+
+
+class ProbeMedia(Tool):
+    name = "probe_media"
+    description = "Show duration, resolution, codecs and streams of a video/audio file in the workspace (ffprobe)."
+    parameters = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+    timeout = 120
+
+    async def run(self, ctx, args):
+        src = _ws_path(ctx, str(args.get("path", "")))
+        if not src.is_file():
+            return ToolResult(False, "ファイルがありません")
+        probe = await _external(ctx, "ffmpeg", "ffprobe")
+        if probe.stem.lower() == "ffprobe":
+            code, out = await ctx.platform.extools.run(probe, ["-v", "error", "-show_entries",
+                                                               "format=duration,size,bit_rate:stream=codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels",
+                                                               "-of", "json", str(src)], cwd=src.parent, timeout=60)
+        else:
+            code, out = await ctx.platform.extools.run(probe, ["-hide_banner", "-nostdin", "-i", str(src)], cwd=src.parent, timeout=60)
+            code = 0
+        return ToolResult(code == 0, out[-3000:])
+
+
+class ConvertDocument(Tool):
+    name = "convert_document"
+    description = ("Convert documents in the sandbox workspace with pandoc (downloaded automatically the first time): "
+                   "Markdown / Word (.docx) / HTML / ODT / EPUB / reStructuredText / LaTeX / plain text / Jupyter. "
+                   "The output file is shown to the user.")
+    parameters = {"type": "object", "properties": {
+        "input": {"type": "string"}, "output": {"type": "string", "description": "workspace path; extension = format"}},
+        "required": ["input", "output"]}
+    timeout = 300
+
+    async def run(self, ctx, args):
+        src, dst = _ws_path(ctx, str(args.get("input", ""))), _ws_path(ctx, str(args.get("output", "")))
+        if not src.is_file():
+            return ToolResult(False, "入力ファイルがありません")
+        fin, fout = DOC_FORMATS.get(src.suffix.lower()), DOC_FORMATS.get(dst.suffix.lower())
+        if not fin or not fout:
+            return ToolResult(False, f"対応形式: {', '.join(sorted(DOC_FORMATS))} (PDF への変換は未対応)")
+        pandoc = await _external(ctx, "pandoc")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        # --sandbox: pandoc may not read other files or the network while converting
+        code, out = await ctx.platform.extools.run(pandoc, ["--sandbox", "-f", fin, "-t", fout, "-o", str(dst), str(src)],
+                                                   cwd=src.parent)
+        if code != 0 or not dst.exists():
+            return ToolResult(False, f"pandoc が失敗しました (code {code}):\n{out[-1500:]}")
+        rel = dst.relative_to(ctx.workspace).as_posix()
+        present(ctx, rel)
+        return ToolResult(True, f"created /workspace/{rel} and showed it to the user")
+
+
 class MemorySearch(Tool):
     name = "memory_search"
     description = "Search the user's long-term memory (facts and preferences they asked you to remember)."
@@ -451,6 +573,7 @@ class GenerateMedia(Tool):
 
 ALL_TOOLS: dict[str, Tool] = {t.name: t for t in (WebResearch(), WebSearch(), WebFetch(), RunCode(), ReadFile(), WriteFile(),
                                                   ReadWorkspace(), ListWorkspace(), ShareFile(), DownloadFile(),
+                                                  ConvertMedia(), ProbeMedia(), ConvertDocument(),
                                                   MemorySearch(), MemorySave(),
                                                   GenerateMedia("image"), GenerateMedia("video"), GenerateMedia("music"))}
 

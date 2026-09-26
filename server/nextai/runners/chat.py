@@ -113,11 +113,13 @@ async def _attachment_context(p: Any, user: dict, rows: list[dict], query: str, 
     return "\n\n".join(text_parts), image_parts, notes
 
 
-WORKSPACE_TOOLS = ("run_code", "write_file", "read_workspace", "list_workspace", "download_file", "share_file")
+WORKSPACE_TOOLS = ("run_code", "write_file", "read_workspace", "list_workspace", "download_file", "share_file",
+                   "convert_media", "probe_media", "convert_document")
 WORKSPACE_RULES = """サンドボックス (隔離環境) の作業ディレクトリ /workspace をこの会話で使えます。
 - run_code のコードはこの中だけで動き、ネットワークにはアクセスできません (Python 標準ライブラリのみ)。
 - 利用者の添付ファイルは uploads/ に置かれています。Web上のデータは download_file で downloads/ に、調べたページは web_fetch の save_as で research/ に保存してから run_code で処理できます。
 - run_code で作ったグラフ・表・文書 (png, svg, csv, xlsx, pdf, html, md など) は自動で利用者に表示されます。それ以外を渡すときは share_file を使ってください。
+- 動画・音声の変換/切り出しは convert_media (ffmpeg)、文書形式の変換 (Markdown⇔Word など) は convert_document (pandoc) を使えます。必要なツールは初回に自動でダウンロードされます。
 - ファイルは会話が続く限り残ります。
 現在のファイル:
 {listing}"""

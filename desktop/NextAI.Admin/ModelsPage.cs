@@ -253,7 +253,7 @@ namespace NextAI.Admin
         {
             ("profile", "Dynamic Profile (速度特化 / 精度特化 / 自律特化 の内部チューニング)"),
             ("scheduler", "GPUスケジューラ / キュー"), ("resources", "リソース管理 (VRAM/RAM/温度/ストレージ)"), ("models", "モデル / キャッシュ"),
-            ("sandbox", "コードサンドボックス"), ("web", "Web検索 / ブラウジング"), ("generation", "画像・動画・音楽の生成制限"),
+            ("sandbox", "コードサンドボックス"), ("tools", "外部ツール (ffmpeg / pandoc)"), ("web", "Web検索 / ブラウジング"), ("generation", "画像・動画・音楽の生成制限"),
             ("api", "OpenAI互換API / メンバーのAPIキー"),
             ("auth", "認証 / セッション / 信頼端末"), ("users", "新規メンバーの既定値"), ("storage", "ストレージ"), ("server", "サーバー (再起動が必要)"),
         };
@@ -265,6 +265,7 @@ namespace NextAI.Admin
             "vram_reserve_mb: Windows/他アプリ用に常に空けるVRAM。host_friendly: ゲーム等が使うVRAMを予算から除外。ram_*_mb: 空きRAMがこの値を下回ると段階的に負荷を下げます。disk_margin_gb: 常に確保するディスク空き容量。",
             "kv_cache_type: KVキャッシュ量子化 (q8_0推奨)。cache_reuse: プレフィックスキャッシュ再利用。idle_unload_seconds: 未使用モデルを解放するまでの時間。prefetch: 次に使うモデルをRAMへ先読み (スラッシング時は自動停止)。",
             "コード実行は WASM (python.wasm) で隔離されます。ネットワーク・プロセス生成は不可、メモリ/時間/ディスク容量を制限します。",
+            "auto_install: 必要になったときに公式リリース (GitHub, SHA-256 検証) から自動ダウンロードするか。allowed: AI が使ってよいツール (ffmpeg: 動画・音声の変換、pandoc: 文書形式の変換)。timeout_seconds: 1回の実行の上限。ツールはサンドボックス作業ディレクトリ内のファイルにだけ、NextAI が組み立てた引数で実行されます。",
             "SSRF対策として localhost・LAN・内部アドレスへのアクセスは常に遮断されます。search_provider: duckduckgo / searxng / brave。",
             "動画生成はローカルGPU向けに尺と解像度を制限しています。コストは生成クォータの消費量です。",
             "enabled: /v1 (OpenAI互換API) 全体の有効/無効。member_keys: メンバーが設定画面で自分のAPIキーを発行できるか。key_max_days: キーの最長有効日数。max_keys_per_user: 1人あたりの有効キー数。max_tokens_cap: 1回の応答の最大トークン数。APIからの利用もGPUキュー・クォータ・レート制限の対象です。発行済みキーの一覧と失効は「メンバー」→「APIトークン」から。",

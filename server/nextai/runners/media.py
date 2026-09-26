@@ -88,6 +88,8 @@ async def run_media(p: Any, job: Job, user: dict, profile: Profile, prompt: str,
             outputs = await backend.generate(spec, paths, plan, params, out_dir,
                                              lambda v, m: job.emit("progress", value=round(v, 3), message=m),
                                              job.cancel_event)
+        if kind == "video":
+            outputs = await _to_mp4(p, job, out_dir, outputs, int(params.get("fps", 16)))
         for i, f in enumerate(outputs[:4]):
             name = f"{kind}-{job.id[:8]}{'-' + str(i + 1) if len(outputs) > 1 else ''}{f.suffix}"
             row = p.files.save_path(user, f, name, kind="generated", job_id=job.id,
@@ -99,3 +101,24 @@ async def run_media(p: Any, job: Job, user: dict, profile: Profile, prompt: str,
     finally:
         shutil.rmtree(out_dir, ignore_errors=True)
     return rows
+
+
+async def _to_mp4(p: Any, job: Job, out_dir, outputs: list, fps: int) -> list:
+    """Generated clips come out as MJPEG AVI (turned into animated WebP). With ffmpeg available - downloaded on
+    first use - encode an H.264 MP4 instead: plays everywhere, seekable, much smaller."""
+    src = out_dir / "out.avi"
+    if not src.exists() or any(str(o).endswith((".mp4", ".webm")) for o in outputs):
+        return outputs
+    try:
+        ffmpeg = await p.extools.ensure("ffmpeg", job.emit)
+    except Exception as e:  # noqa: BLE001 - keep the WebP
+        job.emit("notice", message=f"MP4 変換を省略しました: {e}")
+        return outputs
+    dst = out_dir / "video.mp4"
+    code, out = await p.extools.run(ffmpeg, ["-hide_banner", "-nostdin", "-y", "-protocol_whitelist", "file",
+                                             "-r", str(max(1, fps)), "-i", str(src), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                                             "-movflags", "+faststart", str(dst)], cwd=out_dir, timeout=300)
+    if code == 0 and dst.exists() and dst.stat().st_size > 0:
+        return [dst]
+    job.emit("notice", message="MP4 変換に失敗したため WebP で保存します")
+    return outputs

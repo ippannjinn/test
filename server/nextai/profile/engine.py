@@ -23,6 +23,7 @@ POLICY_KEYS = ("max_tokens", "ctx_tokens", "max_steps", "max_seconds", "max_tool
 MEDIA_KIND = {"image_gen": "image", "video_gen": "video", "music_gen": "music"}
 
 
+EXT_TOOLS = ["convert_media", "probe_media", "convert_document"]  # ffmpeg / pandoc, installed on first use
 MODE_LABEL = {"fast": "速度特化", "quality": "精度特化", "autonomous": "自律特化"}
 
 
@@ -146,7 +147,8 @@ class ProfileEngine:
         """The conversation already has sandbox files: keep them reachable (follow-ups like "そのファイルを渡して")."""
         if not self.sandbox_enabled_fn():
             return
-        prof.tools = list(dict.fromkeys(prof.tools + ["run_code", "list_workspace", "read_workspace", "write_file", "share_file"]))
+        prof.tools = list(dict.fromkeys(prof.tools + ["run_code", "list_workspace", "read_workspace", "write_file", "share_file"]
+                                        + EXT_TOOLS))
         if not prof.use_agent:
             prof.use_agent = True
             prof.limits = {**prof.limits, "max_steps": max(4, int(prof.limits.get("max_steps", 1))),
@@ -180,14 +182,14 @@ class ProfileEngine:
             tools.append("memory_save")
         if sandbox and ("run_code" in tools or a.needs_files or a.needs_web):
             # the per-conversation sandbox workspace: uploads, downloaded data and code outputs live there
-            tools += ["list_workspace", "read_workspace", "write_file", "share_file"]
+            tools += ["list_workspace", "read_workspace", "write_file", "share_file"] + EXT_TOOLS
             if a.needs_web and self.web_enabled_fn():
                 tools.append("download_file")
         if a.autonomous:
             if web:
                 tools += ["web_research", "web_search", "web_fetch", "download_file"]
             if sandbox:
-                tools += ["run_code", "list_workspace", "read_workspace", "write_file", "share_file"]
+                tools += ["run_code", "list_workspace", "read_workspace", "write_file", "share_file"] + EXT_TOOLS
             tools += ["memory_search"]
         media = self.media_tools()
         if a.is_media:
