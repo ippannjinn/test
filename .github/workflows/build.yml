@@ -53,8 +53,17 @@ jobs:
         with:
           name: NextAI-Platform-Setup
           path: dist/*
-      - name: Publish release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish release (v* tags, or commits containing [release])
+        if: startsWith(github.ref, 'refs/tags/v') || contains(github.event.head_commit.message, '[release]')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/NextAI-Platform-Setup.exe dist/NextAI-Platform-Setup.exe.sha256 dist/update-manifest.json --title "NextAI Platform ${GITHUB_REF_NAME}" --notes "Single-file installer. Verify with the .sha256 file."
+        run: |
+          VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' server/nextai/__init__.py)"
+          TAG="${GITHUB_REF_NAME}"
+          case "$GITHUB_REF" in refs/tags/v*) ;; *) TAG="v${VERSION}" ;; esac
+          FILES="dist/NextAI-Platform-Setup.exe dist/NextAI-Platform-Setup.exe.sha256 dist/update-manifest.json"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" $FILES --clobber
+          else
+            gh release create "$TAG" $FILES --target "$GITHUB_SHA" --title "NextAI Platform $TAG" --notes-file .github/release-notes.md
+          fi
