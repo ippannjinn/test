@@ -80,6 +80,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "thrash_window_seconds": 600,
         "thrash_max_swaps": 6,
         "kv_cache_type": "q8_0",
+        "moe_ram_overcommit": 0.0,
         "cache_reuse": 256,
         "llm_parallel": 4,
         "base_port": 18080,

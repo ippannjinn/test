@@ -144,3 +144,14 @@ def test_web_search_is_always_available_for_real_questions(engine):
     assert "web_search" in q.tools and "web_fetch" in q.tools and q.use_agent
     assert "web_search" not in eng.decide(analyze("こんにちは")).tools
     assert "web_search" not in eng.decide(analyze("この文を英語に翻訳して: おはよう")).tools
+
+
+def test_moe_never_plans_beyond_free_ram():
+    cat = Catalog.load()
+    spec = cat.get("qwen3-30b-a3b-instruct")
+    # 12GB-class GPU, little free RAM (other apps running): experts must not spill past the RAM budget
+    assert plan_llm(spec, 18600, vram_budget_mb=8700, ram_budget_mb=4000) is None
+    ok = plan_llm(spec, 18600, vram_budget_mb=8700, ram_budget_mb=16000)
+    assert ok and ok.est_ram_mb <= 16000
+    # the old optimistic mmap behaviour is still available as an explicit setting
+    assert plan_llm(spec, 18600, vram_budget_mb=8700, ram_budget_mb=4000, ram_overcommit=0.5) is not None

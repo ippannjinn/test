@@ -66,7 +66,7 @@ namespace NextAI.Admin
             status.ForeColor = Ui.StatusColor(level);
             cpu.Set($"{r.Num("cpu_percent"):F0}%", $"{r.Int("cpu_count")} スレッド", r.Num("cpu_percent") / 100);
             double ramTotal = r.Num("ram_total_mb"), ramAvail = r.Num("ram_available_mb");
-            ram.Set($"{(ramTotal - ramAvail) / 1024:F1} / {ramTotal / 1024:F1} GB", $"空き {ramAvail / 1024:F1} GB", ramTotal > 0 ? (ramTotal - ramAvail) / ramTotal : 0);
+            ram.Set($"{(ramTotal - ramAvail) / 1024:F1} / {ramTotal / 1024:F1} GB", $"空き {ramAvail / 1024:F1} GB / NextAI {r.Num("own_ram_mb") / 1024:F1}GB / 他 {Math.Max(0, ramTotal - ramAvail - r.Num("own_ram_mb")) / 1024:F1}GB", ramTotal > 0 ? (ramTotal - ramAvail) / ramTotal : 0);
             if (g != null)
             {
                 double vt = g.Num("vram_total_mb"), vu = g.Num("vram_used_mb");

@@ -155,7 +155,8 @@ class ModelManager:
             parallel = min(spec.defaults.get("parallel", 1), self.settings.models.llm_parallel)
             return plan_llm(spec, self._file_mb(spec), vram_budget_mb=vram_free_mb, ram_budget_mb=gs.ram_budget_mb,
                             ctx=ctx, parallel=parallel, kv_type=self.settings.models.kv_cache_type,
-                            correction=corr, has_gpu=gs.has_gpu)
+                            correction=corr, has_gpu=gs.has_gpu,
+                            ram_overcommit=float(self.settings.models.moe_ram_overcommit))
         return plan_media(spec, vram_budget_mb=vram_free_mb, correction=corr, has_gpu=gs.has_gpu)
 
     @staticmethod
@@ -167,6 +168,20 @@ class ModelManager:
         if spec.moe:
             return plan.n_cpu_moe <= spec.arch.get("n_layers", 48) * 0.75
         return plan.n_gpu_layers >= 999 and not plan.offload
+
+    def fits_now(self, model_id: str) -> bool:
+        """Loaded already, or loadable within the current VRAM + free-RAM budget (evicting idle models)."""
+        rt = self.runtimes.get(model_id)
+        if rt is not None and rt.state == HOT:
+            return True
+        try:
+            return self.can_load(model_id)[0] != "impossible"
+        except Exception:  # noqa: BLE001 - be permissive; loading will report the real error
+            return True
+
+    def ram_heavy(self, model_id: str) -> bool:
+        rt = self.runtimes.get(model_id)
+        return bool(rt and rt.plan and rt.plan.est_ram_mb > 1024)
 
     def can_load(self, model_id: str) -> tuple[str, list[str], LaunchPlan | None]:
         """Returns ("ok", evict, plan) | ("blocked", busy_ids, None) | ("impossible", [], None)."""

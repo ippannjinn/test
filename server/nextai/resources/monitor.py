@@ -41,6 +41,7 @@ class Snapshot:
     disk_free_gb: float
     gpus: list[GpuInfo] = field(default_factory=list)
     own_vram_mb: int = 0
+    own_ram_mb: int = 0
     gpu_provider: str = "none"
 
     @property
@@ -244,6 +245,7 @@ class ResourceMonitor:
                         cpu_count=psutil.cpu_count(logical=True) or 1, ram_total_mb=int(vm.total / 2**20),
                         ram_available_mb=int(vm.available / 2**20), disk_total_gb=round(disk_total, 2),
                         disk_free_gb=round(disk_free, 2), gpus=gpus, own_vram_mb=int(self.own_vram_fn()),
+                        own_ram_mb=_own_ram_mb(),
                         gpu_provider=self.gpu.name)
         self._latest = snap
         return snap
@@ -282,3 +284,18 @@ class ResourceMonitor:
                 pass
             self._task = None
         self.gpu.close()
+
+
+def _own_ram_mb() -> int:
+    """RAM held by the server and its workers (llama-server, sd, ...): resident set of the process tree."""
+    try:
+        me = psutil.Process()
+        total = me.memory_info().rss
+        for c in me.children(recursive=True):
+            try:
+                total += c.memory_info().rss
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return int(total / 2**20)
+    except Exception:  # noqa: BLE001
+        return 0

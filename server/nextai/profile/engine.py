@@ -241,6 +241,10 @@ class ProfileEngine:
             prof.reasons.append("利用可能なモデルがありません")
             return
         ranked = sorted(cands, key=lambda s: self._score_model(s, prof, a), reverse=True)
+        fitting = [s for s in ranked if self.manager.fits_now(s.id)]
+        if fitting and fitting[0] is not ranked[0]:
+            prof.reasons.append(f"{ranked[0].display_name} は現在の空きメモリでは載らないため見送り")
+            ranked = fitting + [s for s in ranked if s not in fitting]
         best = ranked[0]
         prof.model_id, prof.model_name = best.id, best.display_name
         prof.fallback_models = [s.id for s in ranked[1:]]
@@ -321,6 +325,15 @@ class ProfileEngine:
                 new.label = tuning_label(new.tuning)
                 new.reasons.append("リソース逼迫のため途中で軽量化")
                 changed = True
+                if prof.model_id and self.manager.ram_heavy(prof.model_id):
+                    # the model itself holds a lot of RAM (CPU-side MoE experts): move to one that fits in VRAM
+                    lighter = [m for m in prof.fallback_models if self.manager.usable(m) and not self.manager.ram_heavy(m)
+                               and self.manager.fits_now(m)]
+                    if lighter:
+                        new.fallback_models = [m for m in prof.fallback_models if m != lighter[0]] + [prof.model_id]
+                        new.model_id = lighter[0]
+                        new.model_name = self.manager.catalog.get(lighter[0]).display_name
+                        new.reasons.append(f"メモリを多く使うモデルのため {new.model_name} に切替")
         elif signal == "needs_web":
             if "web_search" not in prof.tools and self.web_enabled_fn():
                 new.tools = prof.tools + ["web_research", "web_search", "web_fetch"]

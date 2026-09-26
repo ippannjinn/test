@@ -48,7 +48,9 @@ def overhead_mb(spec: ModelSpec, ctx: int) -> float:
 
 def plan_llm(spec: ModelSpec, file_mb: float, *, vram_budget_mb: float, ram_budget_mb: float,
              ctx: int | None = None, parallel: int | None = None, kv_type: str = "q8_0",
-             correction: float = 1.0, has_gpu: bool = True) -> LaunchPlan | None:
+             correction: float = 1.0, has_gpu: bool = True, ram_overcommit: float = 0.0) -> LaunchPlan | None:
+    """ram_overcommit: fraction of the file allowed beyond the RAM budget for CPU-side MoE experts (mmap).
+    Default 0: on Windows mapped expert pages become resident, so exceeding the budget starves the PC."""
     ctx = int(min(ctx or spec.defaults.get("ctx", 8192), spec.ctx_max))
     parallel = int(parallel or spec.defaults.get("parallel", 1))
     n_layers = int(spec.arch.get("n_layers", 32))
@@ -73,7 +75,7 @@ def plan_llm(spec: ModelSpec, file_mb: float, *, vram_budget_mb: float, ram_budg
                 n_cpu_moe = n_layers - gpu_expert_layers
                 vram = base + gpu_expert_layers * per_layer
                 ram = n_cpu_moe * per_layer
-                if ram <= ram_budget_mb + file_mb * 0.5:  # mmap: cold experts may stay on NVMe
+                if ram <= ram_budget_mb + file_mb * ram_overcommit:
                     notes = [f"MoE: expert {gpu_expert_layers}/{n_layers}層をVRAM, {n_cpu_moe}層をRAM/NVMe"]
                     return LaunchPlan(spec.id, True, 999, n_cpu_moe, ctx, parallel, kv_type,
                                       int(vram * correction), int(ram), notes=notes)
